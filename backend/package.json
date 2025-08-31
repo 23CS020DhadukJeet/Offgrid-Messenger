@@ -1,0 +1,19 @@
+{
+  "name": "ip-messenger-clone-backend",
+  "version": "1.0.0",
+  "description": "Backend for LAN-based IP Messenger Clone",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "dev": "nodemon server.js"
+  },
+  "dependencies": {
+    "ws": "^8.13.0",
+    "crypto": "^1.0.1"
+  },
+  "devDependencies": {
+    "nodemon": "^2.0.22"
+  },
+  "author": "",
+  "license": "MIT"
+}
