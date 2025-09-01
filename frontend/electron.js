@@ -1,5 +1,5 @@
 /**
- * electron.js - Electron main process for IP Messenger Clone
+ * electron.js - Electron main process for Offgrid Messenger
  * 
  * This file sets up the Electron application, creates the main window,
  * and handles communication between the renderer process and the backend.
@@ -97,7 +97,7 @@ function createTray() {
     }
   ]);
   
-  tray.setToolTip('IP Messenger Clone');
+  tray.setToolTip('Offgrid Messenger');
   tray.setContextMenu(contextMenu);
   
   tray.on('click', () => {

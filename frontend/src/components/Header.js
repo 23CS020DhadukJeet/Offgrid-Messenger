@@ -46,7 +46,7 @@ function Header({ connected, shareClipboard, selectedPeer, onOpenSettings, user,
     <AppBar position="static">
       <Toolbar>
         <Typography variant="h6" component="div" sx={{ flexGrow: 1 }}>
-          IP Messenger Clone
+          Offgrid Messenger 
         </Typography>
         
         {/* Connection status indicator */}

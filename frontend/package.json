@@ -32,7 +32,7 @@
   },
   "build": {
     "appId": "com.ipmessenger.clone",
-    "productName": "IP Messenger Clone",
+    "productName": "Offgrid Messenger",
     "files": [
       "build/**/*",
       "node_modules/**/*",
