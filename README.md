@@ -1,4 +1,4 @@
-# IP Messenger Clone
+# Offgrid Messenger
 
 A LAN-based messaging application built with Node.js, Electron, and React that allows users to communicate within a local network. This application supports peer-to-peer messaging, file transfers, and clipboard sharing with AES encryption.
 
