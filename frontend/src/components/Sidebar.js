@@ -19,9 +19,12 @@ import Typography from '@mui/material/Typography';
 import Divider from '@mui/material/Divider';
 import Badge from '@mui/material/Badge';
 import LinearProgress from '@mui/material/LinearProgress';
+import Button from '@mui/material/Button';
+import IconButton from '@mui/material/IconButton';
 import PersonIcon from '@mui/icons-material/Person';
 import FolderIcon from '@mui/icons-material/Folder';
 import ComputerIcon from '@mui/icons-material/Computer';
+import GroupIcon from '@mui/icons-material/Group';
 
 // TabPanel component for tab content
 function TabPanel(props) {
@@ -45,7 +48,16 @@ function TabPanel(props) {
   );
 }
 
-function Sidebar({ peers, selectedPeer, onSelectPeer, fileTransfers }) {
+function Sidebar({ 
+  peers, 
+  selectedPeer, 
+  onSelectPeer, 
+  fileTransfers, 
+  groups = [], 
+  selectedGroup, 
+  onSelectGroup,
+  onManageGroups 
+}) {
   const [tabValue, setTabValue] = useState(0);
 
   const handleTabChange = (event, newValue) => {
@@ -68,6 +80,14 @@ function Sidebar({ peers, selectedPeer, onSelectPeer, fileTransfers }) {
         sx={{ borderBottom: 1, borderColor: 'divider' }}
       >
         <Tab label="Peers" />
+        <Tab 
+          label="Groups" 
+          icon={groups.length > 0 ? 
+            <Badge color="secondary" badgeContent={groups.length} sx={{ mr: 1 }} /> : 
+            null
+          } 
+          iconPosition="start"
+        />
         <Tab 
           label="Files" 
           icon={fileTransfers.length > 0 ? 
@@ -123,6 +143,61 @@ function Sidebar({ peers, selectedPeer, onSelectPeer, fileTransfers }) {
         </TabPanel>
         
         <TabPanel value={tabValue} index={1}>
+          {groups.length > 0 ? (
+            <List sx={{ padding: 0 }}>
+              {groups.map((group) => (
+                <ListItem 
+                  key={group.id} 
+                  disablePadding
+                  secondaryAction={
+                    <IconButton 
+                      edge="end" 
+                      onClick={() => onManageGroups && onManageGroups()}
+                      size="small"
+                    >
+                      <GroupIcon />
+                    </IconButton>
+                  }
+                >
+                  <ListItemButton 
+                    selected={selectedGroup && selectedGroup.id === group.id}
+                    onClick={() => onSelectGroup && onSelectGroup(group)}
+                  >
+                    <ListItemAvatar>
+                      <Avatar>
+                        <GroupIcon />
+                      </Avatar>
+                    </ListItemAvatar>
+                    <ListItemText 
+                      primary={group.name}
+                      secondary={`${group.members.length} member${group.members.length !== 1 ? 's' : ''}`}
+                      primaryTypographyProps={{
+                        className: 'text-ellipsis',
+                        title: group.name
+                      }}
+                    />
+                  </ListItemButton>
+                </ListItem>
+              ))}
+            </List>
+          ) : (
+            <Box sx={{ p: 2, textAlign: 'center' }}>
+              <Typography color="text.secondary">
+                No groups found
+              </Typography>
+              <Button 
+                variant="outlined" 
+                size="small" 
+                sx={{ mt: 1 }}
+                onClick={() => onManageGroups && onManageGroups()}
+              >
+                Create Group
+              </Button>
+            </Box>
+          )}
+        </TabPanel>
+        
+        <TabPanel value={tabValue} index={2}>
           {fileTransfers.length > 0 ? (
             <List sx={{ padding: 0 }}>
               {fileTransfers.map((transfer) => (

@@ -19,6 +19,9 @@ import NotificationManager from './components/NotificationManager';
 import Header from './components/Header';
 import Sidebar from './components/Sidebar';
 import ChatArea from './components/ChatArea';
+import GroupChat from './components/GroupChat';
+import GroupManager from './components/GroupManager';
+import FileTransferHistory from './components/FileTransferHistory';
 import ConnectionStatus from './components/ConnectionStatus';
 import Settings from './components/Settings';
 import Login from './components/Login';
@@ -27,7 +30,30 @@ import Login from './components/Login';
 import { isLoggedIn, getCurrentUser, logoutUser } from './services/authService';
 
 // Import WebSocket service
-import { initializeWebSocket, sendMessage, closeWebSocket } from './services/websocketService';
+import { initializeWebSocket, sendMessage, closeWebSocket, connectToPeer, sendMessageToPeer, isConnectedToPeer } from './services/websocketService';
+
+// Import discovery service
+import { onPeerDiscovered, getDiscoveredPeers } from './services/discoveryService';
+
+// Import group services
+import { 
+  createGroup, 
+  getUserGroups, 
+  sendGroupMessage 
+} from './services/groupService';
+import { 
+  sendFileToGroup as sendFileToGroupService, 
+  handleGroupFileRequest, 
+  handleGroupFileChunk, 
+  handleGroupFileComplete,
+  getActiveGroupTransfers 
+} from './services/groupFileService';
+
+// Import file transfer history service
+import { 
+  addFileTransferToHistory, 
+  updateFileTransferInHistory 
+} from './services/fileTransferHistoryService';
 
 function App() {
   // State for user authentication
@@ -37,6 +63,12 @@ function App() {
   // State for managing peers
   const [peers, setPeers] = useState([]);
   const [selectedPeer, setSelectedPeer] = useState(null);
+  
+  // State for managing groups
+  const [groups, setGroups] = useState([]);
+  const [selectedGroup, setSelectedGroup] = useState(null);
+  const [groupMessages, setGroupMessages] = useState({});
+  const [groupFileTransfers, setGroupFileTransfers] = useState([]);
   
   // State for managing messages
   const [messages, setMessages] = useState({});
@@ -61,6 +93,12 @@ function App() {
   // State for settings dialog
   const [settingsOpen, setSettingsOpen] = useState(false);
   
+  // State for group manager dialog
+  const [groupManagerOpen, setGroupManagerOpen] = useState(false);
+  
+  // State for file transfer history dialog
+  const [fileTransferHistoryOpen, setFileTransferHistoryOpen] = useState(false);
+  
   // State for theme mode
   const [darkMode, setDarkMode] = useState(false);
   
@@ -84,7 +122,7 @@ function App() {
     },
   }), [darkMode]);
   
-  // Initialize WebSocket connection
+  // Initialize WebSocket connection and peer discovery
   useEffect(() => {
     const handleOpen = () => {
       setConnected(true);
@@ -151,6 +189,22 @@ function App() {
             handleClipboardMessage(data);
             break;
             
+          case 'group_chat':
+            handleGroupChatMessage(data);
+            break;
+            
+          case 'group_file_request':
+            handleGroupFileRequest(data);
+            break;
+            
+          case 'group_file_chunk':
+            handleGroupFileChunk(data);
+            break;
+            
+          case 'group_file_complete':
+            handleGroupFileComplete(data);
+            break;
+            
           default:
             console.log('Unknown message type:', data.type);
         }
@@ -167,9 +221,37 @@ function App() {
       onMessage: handleMessage
     });
     
-    // Clean up WebSocket connection on unmount
+    // Initialize peer discovery
+    const unsubscribeDiscovery = onPeerDiscovered((peer, isNewPeer) => {
+      if (isNewPeer) {
+        // Automatically connect to newly discovered peers
+        connectToPeer(peer).then(success => {
+          if (success) {
+            // Add to peers list
+            setPeers(prevPeers => {
+              // Check if peer already exists
+              if (prevPeers.some(p => p.id === peer.id)) {
+                return prevPeers;
+              }
+              return [...prevPeers, peer];
+            });
+            showNotification(`Connected to ${peer.hostname || peer.id}`, 'success');
+          } else {
+            showNotification(`Failed to connect to ${peer.hostname || peer.id}`, 'error');
+          }
+        });
+      } else {
+        // Update existing peer
+        setPeers(prevPeers => {
+          return prevPeers.map(p => p.id === peer.id ? peer : p);
+        });
+      }
+    });
+    
+    // Clean up WebSocket connection and discovery on unmount
     return () => {
       closeWebSocket();
+      unsubscribeDiscovery();
     };
   }, [selectedPeer]);
   
@@ -205,22 +287,28 @@ function App() {
   const handleFileRequest = (data) => {
     const { transferId, fileName, fileSize, senderPeerId } = data;
     
-    // Add to file transfers
-    setFileTransfers(prev => [
-      ...prev,
-      {
-        id: transferId,
-        fileName,
-        fileSize,
-        progress: 0,
-        status: 'receiving',
-        peerId: senderPeerId
-      }
-    ]);
-    
-    // Show notification
     const peer = peers.find(p => p.id === senderPeerId);
     const peerName = peer ? (peer.hostname || peer.id) : senderPeerId;
+    
+    // Add to file transfers
+    const transfer = {
+      id: transferId,
+      fileName,
+      fileSize,
+      progress: 0,
+      status: 'receiving',
+      peerId: senderPeerId,
+      peerName,
+      direction: 'download',
+      timestamp: Date.now()
+    };
+    
+    setFileTransfers(prev => [...prev, transfer]);
+    
+    // Add to history
+    addFileTransferToHistory(transfer);
+    
+    // Show notification
     showNotification(`${peerName} is sending you a file: ${fileName}`, 'info');
   };
   
@@ -233,7 +321,12 @@ function App() {
       return prev.map(transfer => {
         if (transfer.id === transferId) {
           const progress = Math.floor((chunkIndex / totalChunks) * 100);
-          return { ...transfer, progress };
+          const updatedTransfer = { ...transfer, progress };
+          
+          // Update history
+          updateFileTransferInHistory(transferId, { progress });
+          
+          return updatedTransfer;
         }
         return transfer;
       });
@@ -248,7 +341,12 @@ function App() {
     setFileTransfers(prev => {
       return prev.map(transfer => {
         if (transfer.id === transferId) {
-          return { ...transfer, progress: 100, status: 'completed' };
+          const updatedTransfer = { ...transfer, progress: 100, status: 'completed' };
+          
+          // Update history
+          updateFileTransferInHistory(transferId, { progress: 100, status: 'completed' });
+          
+          return updatedTransfer;
         }
         return transfer;
       });
@@ -271,19 +369,136 @@ function App() {
     showNotification(`Received clipboard content from ${peerName}`, 'info');
   };
   
+  // Handle group chat messages
+  const handleGroupChatMessage = (data) => {
+    const { groupId, senderId, content, timestamp } = data;
+    
+    setGroupMessages(prevMessages => {
+      const groupMessages = prevMessages[groupId] || [];
+      return {
+        ...prevMessages,
+        [groupId]: [...groupMessages, { type: 'group_chat', groupId, senderId, content, timestamp }]
+      };
+    });
+    
+    // Show notification if message is from a different group than selected
+    if (!selectedGroup || selectedGroup.id !== groupId) {
+      const group = groups.find(g => g.id === groupId);
+      const groupName = group ? group.name : groupId;
+      showNotification(`New message in ${groupName}`, 'info');
+      
+      // Show system notification if window is not focused
+      if (document.hidden) {
+        window.electron.showNotification({
+          title: `Message in ${groupName}`,
+          body: content
+        });
+      }
+    }
+  };
+  
+  // Handle group file transfer requests
+  const handleGroupFileRequest = (data) => {
+    const { groupId, transferId, fileName, fileSize, senderId } = data;
+    
+    const group = groups.find(g => g.id === groupId);
+    const groupName = group ? group.name : groupId;
+    const peer = peers.find(p => p.id === senderId);
+    const peerName = peer ? (peer.hostname || peer.id) : senderId;
+    
+    // Add to group file transfers
+    const transfer = {
+      id: transferId,
+      fileName,
+      fileSize,
+      progress: 0,
+      status: 'receiving',
+      groupId,
+      groupName,
+      senderId,
+      peerId: senderId,
+      peerName,
+      direction: 'download',
+      timestamp: Date.now()
+    };
+    
+    setGroupFileTransfers(prev => [...prev, transfer]);
+    
+    // Add to history
+    addFileTransferToHistory(transfer);
+    
+    // Show notification
+    showNotification(`File shared in ${groupName}: ${fileName}`, 'info');
+  };
+  
+  // Handle group file chunks
+  const handleGroupFileChunk = (data) => {
+    const { groupId, transferId, chunkIndex, totalChunks } = data;
+    
+    // Update group file transfer progress
+    setGroupFileTransfers(prev => {
+      return prev.map(transfer => {
+        if (transfer.id === transferId) {
+          const progress = Math.floor((chunkIndex / totalChunks) * 100);
+          const updatedTransfer = { ...transfer, progress };
+          
+          // Update history
+          updateFileTransferInHistory(transferId, { progress });
+          
+          return updatedTransfer;
+        }
+        return transfer;
+      });
+    });
+  };
+  
+  // Handle group file transfer completion
+  const handleGroupFileComplete = (data) => {
+    const { groupId, transferId } = data;
+    
+    // Update group file transfer status
+    setGroupFileTransfers(prev => {
+      return prev.map(transfer => {
+        if (transfer.id === transferId) {
+          const updatedTransfer = { ...transfer, progress: 100, status: 'completed' };
+          
+          // Update history
+          updateFileTransferInHistory(transferId, { progress: 100, status: 'completed' });
+          
+          return updatedTransfer;
+        }
+        return transfer;
+      });
+    });
+    
+    // Show notification
+    const group = groups.find(g => g.id === groupId);
+    const groupName = group ? group.name : groupId;
+    showNotification(`File transfer completed in ${groupName}`, 'success');
+  };
+  
   // Send a chat message
   const sendChatMessage = (content) => {
     if (!selectedPeer) return;
     
     const messageData = {
       type: 'chat',
+      from: 'me',
       to: selectedPeer.id,
       content,
       timestamp: Date.now()
     };
     
-    // Send message via WebSocket
-    sendMessage(messageData);
+    // Try to send via peer-to-peer connection first
+    let messageSent = false;
+    if (isConnectedToPeer(selectedPeer.id)) {
+      messageSent = sendMessageToPeer(selectedPeer.id, messageData);
+    }
+    
+    // Fallback to server relay if peer-to-peer fails
+    if (!messageSent) {
+      sendMessage(messageData);
+    }
     
     // Add message to local state
     setMessages(prevMessages => {
@@ -305,6 +520,65 @@ function App() {
     // This would typically involve sending a file request to the backend
     // For now, we'll just show a notification
     showNotification(`Sending file to ${selectedPeer.hostname || selectedPeer.id}`, 'info');
+  };
+  
+  // Send a group chat message
+  const sendGroupChatMessage = (content) => {
+    if (!selectedGroup) return;
+    
+    const messageData = {
+      type: 'group_chat',
+      groupId: selectedGroup.id,
+      senderId: 'me',
+      content,
+      timestamp: Date.now()
+    };
+    
+    // Send via WebSocket
+    sendMessage(messageData);
+    
+    // Add message to local state
+    setGroupMessages(prevMessages => {
+      const groupMessages = prevMessages[selectedGroup.id] || [];
+      return {
+        ...prevMessages,
+        [selectedGroup.id]: [
+          ...groupMessages,
+          { type: 'group_chat', groupId: selectedGroup.id, senderId: 'me', content, timestamp: Date.now() }
+        ]
+      };
+    });
+  };
+  
+  // Send a file to group
+  const sendFileToGroup = async (file) => {
+    if (!selectedGroup) return;
+    
+    try {
+      const transferId = await sendFileToGroupService(file, selectedGroup.id, user.id, sendMessage);
+      
+      // Add to history
+      const transfer = {
+        id: transferId,
+        fileName: file.name,
+        fileSize: file.size,
+        peerId: user.id,
+        peerName: username,
+        direction: 'upload',
+        status: 'sending',
+        progress: 0,
+        timestamp: Date.now(),
+        groupId: selectedGroup.id,
+        groupName: selectedGroup.name
+      };
+      
+      addFileTransferToHistory(transfer);
+      
+      showNotification(`Sending file to group ${selectedGroup.name}`, 'info');
+    } catch (error) {
+      console.error('Error sending file to group:', error);
+      showNotification('Failed to send file to group', 'error');
+    }
   };
   
   // Share clipboard content
@@ -342,6 +616,41 @@ function App() {
     // Save username to localStorage
     localStorage.setItem('username', newUsername);
     showNotification(`Username changed to ${newUsername}`, 'success');
+  };
+  
+  // Load user groups when user changes
+  useEffect(() => {
+    if (user && user.id) {
+      loadUserGroups();
+    }
+  }, [user]);
+  
+  // Load user groups
+  const loadUserGroups = async () => {
+    if (!user || !user.id) return;
+    
+    try {
+      const userGroups = await getUserGroups(user.id);
+      setGroups(userGroups);
+    } catch (error) {
+      console.error('Error loading user groups:', error);
+    }
+  };
+  
+  // Handle group selection
+  const handleGroupSelect = (group) => {
+    setSelectedGroup(group);
+    setSelectedPeer(null); // Clear peer selection when selecting group
+  };
+  
+  // Handle group management dialog
+  const handleManageGroups = () => {
+    setGroupManagerOpen(true);
+  };
+  
+  // Handle file transfer history dialog
+  const handleOpenFileHistory = () => {
+    setFileTransferHistoryOpen(true);
   };
   
   // Load saved preferences on initial load
@@ -467,6 +776,7 @@ function App() {
             shareClipboard={shareClipboard}
             selectedPeer={selectedPeer}
             onOpenSettings={() => setSettingsOpen(true)}
+            onOpenFileHistory={handleOpenFileHistory}
             user={user}
             onLogout={handleLogout}
           />
@@ -477,16 +787,35 @@ function App() {
               selectedPeer={selectedPeer} 
               onSelectPeer={setSelectedPeer}
               fileTransfers={fileTransfers}
+              groups={groups}
+              selectedGroup={selectedGroup}
+              onSelectGroup={handleGroupSelect}
+              onManageGroups={handleManageGroups}
             />
             
-            <ChatArea 
-              messages={selectedPeer ? (messages[selectedPeer.id] || []) : []}
-              selectedPeer={selectedPeer}
-              onSendMessage={sendChatMessage}
-              onSendFile={sendFile}
-              connected={connected}
-              username={username}
-            />
+            {selectedGroup ? (
+              <GroupChat 
+                messages={selectedGroup ? (groupMessages[selectedGroup.id] || []) : []}
+                selectedGroup={selectedGroup}
+                onSendMessage={sendGroupChatMessage}
+                onSendFile={sendFileToGroup}
+                connected={connected}
+                username={username}
+                groupMembers={selectedGroup ? selectedGroup.members.map(memberId => {
+                  const peer = peers.find(p => p.id === memberId);
+                  return peer || { id: memberId, name: memberId };
+                }) : []}
+              />
+            ) : (
+              <ChatArea 
+                messages={selectedPeer ? (messages[selectedPeer.id] || []) : []}
+                selectedPeer={selectedPeer}
+                onSendMessage={sendChatMessage}
+                onSendFile={sendFile}
+                connected={connected}
+                username={username}
+              />
+            )}
           </Box>
           
           <ConnectionStatus 
@@ -524,6 +853,22 @@ function App() {
             darkMode={darkMode}
             onThemeToggle={handleThemeToggle}
             user={user}
+          />
+          
+          {/* Group manager dialog */}
+          <GroupManager
+            open={groupManagerOpen}
+            onClose={() => setGroupManagerOpen(false)}
+            userId={user ? user.id : null}
+            availablePeers={peers}
+            onGroupSelect={handleGroupSelect}
+            selectedGroup={selectedGroup}
+          />
+          
+          {/* File transfer history dialog */}
+          <FileTransferHistory
+            open={fileTransferHistoryOpen}
+            onClose={() => setFileTransferHistoryOpen(false)}
           />
         </Box>
       )}

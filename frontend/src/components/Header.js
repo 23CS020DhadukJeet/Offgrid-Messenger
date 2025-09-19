@@ -22,10 +22,11 @@ import SettingsIcon from '@mui/icons-material/Settings';
 import WifiIcon from '@mui/icons-material/Wifi';
 import WifiOffIcon from '@mui/icons-material/WifiOff';
 import NotificationsIcon from '@mui/icons-material/Notifications';
+import HistoryIcon from '@mui/icons-material/History';
 import LogoutIcon from '@mui/icons-material/Logout';
 import AccountCircleIcon from '@mui/icons-material/AccountCircle';
 
-function Header({ connected, shareClipboard, selectedPeer, onOpenSettings, user, onLogout }) {
+function Header({ connected, shareClipboard, selectedPeer, onOpenSettings, onOpenFileHistory, user, onLogout }) {
   const [anchorEl, setAnchorEl] = React.useState(null);
   const open = Boolean(anchorEl);
   
@@ -78,6 +79,13 @@ function Header({ connected, shareClipboard, selectedPeer, onOpenSettings, user,
               <ContentCopyIcon />
             </IconButton>
           </span>
+        </Tooltip>
+        
+        {/* File transfer history button */}
+        <Tooltip title="File Transfer History">
+          <IconButton color="inherit" onClick={onOpenFileHistory}>
+            <HistoryIcon />
+          </IconButton>
         </Tooltip>
         
         {/* Settings button */}

@@ -10,6 +10,8 @@ const path = require('path');
 const url = require('url');
 const { spawn } = require('child_process');
 const fs = require('fs');
+const dgram = require('dgram');
+const os = require('os');
 
 // Keep a global reference of the window object to avoid garbage collection
 let mainWindow;
@@ -22,6 +24,11 @@ let tray = null;
 
 // Flag to track if the app is quitting
 let isQuitting = false;
+
+// UDP discovery configuration
+const BROADCAST_INTERVAL = 5000; // milliseconds
+let udpSocket = null;
+let discoveryInterval = null;
 
 /**
  * Create the main application window
@@ -106,6 +113,101 @@ function createTray() {
 }
 
 /**
+ * Get local IP address
+ */
+function getLocalIpAddress() {
+  const interfaces = os.networkInterfaces();
+  for (const name of Object.keys(interfaces)) {
+    for (const iface of interfaces[name]) {
+      // Skip over non-IPv4 and internal (loopback) addresses
+      if (iface.family === 'IPv4' && !iface.internal) {
+        return iface.address;
+      }
+    }
+  }
+  return '127.0.0.1'; // Fallback to localhost if no other IP is found
+}
+
+/**
+ * Start UDP discovery service
+ */
+function startUDPDiscovery() {
+  const localIp = getLocalIpAddress();
+  const hostname = os.hostname();
+  
+  // Create UDP socket
+  udpSocket = dgram.createSocket('udp4');
+  
+  // Handle UDP socket errors
+  udpSocket.on('error', (err) => {
+    console.error(`UDP socket error: ${err.message}`);
+    udpSocket.close();
+  });
+  
+  // Handle incoming UDP messages
+  udpSocket.on('message', (msg, rinfo) => {
+    try {
+      const message = JSON.parse(msg.toString());
+      
+      if (message.type === 'discovery_response') {
+        console.log(`Discovery response from ${rinfo.address}:${rinfo.port}`);
+        
+        // Forward discovery response to renderer process
+        if (mainWindow && mainWindow.webContents) {
+          mainWindow.webContents.send('peer-discovered', {
+            ip: message.ip,
+            port: message.port,
+            hostname: message.hostname,
+            discoveredAt: Date.now()
+          });
+        }
+      }
+    } catch (error) {
+      console.error('Error processing UDP message:', error);
+    }
+  });
+  
+  // Bind UDP socket to any available port
+  udpSocket.bind(() => {
+    const clientPort = udpSocket.address().port;
+    console.log(`UDP discovery client running on port ${clientPort}`);
+    
+    // Enable broadcast
+    udpSocket.setBroadcast(true);
+    
+    // Start broadcasting discovery messages
+    discoveryInterval = setInterval(() => {
+      const discoveryMessage = {
+        type: 'discovery',
+        ip: localIp,
+        port: 8080, // WebSocket port
+        hostname: hostname
+      };
+      
+      const messageBuffer = Buffer.from(JSON.stringify(discoveryMessage));
+      
+      // Broadcast to the LAN on the server's UDP port
+      udpSocket.send(messageBuffer, 0, messageBuffer.length, 8081, '255.255.255.255');
+    }, BROADCAST_INTERVAL);
+  });
+}
+
+/**
+ * Stop UDP discovery service
+ */
+function stopUDPDiscovery() {
+  if (discoveryInterval) {
+    clearInterval(discoveryInterval);
+    discoveryInterval = null;
+  }
+  
+  if (udpSocket) {
+    udpSocket.close();
+    udpSocket = null;
+  }
+}
+
+/**
  * Start the backend server process
  */
 function startBackendServer() {
@@ -166,6 +268,9 @@ app.whenReady().then(() => {
   // Start the backend server
   startBackendServer();
   
+  // Start UDP discovery service
+  startUDPDiscovery();
+  
   // Create the main window
   createWindow();
   
@@ -189,6 +294,9 @@ app.on('window-all-closed', () => {
 // Handle app before-quit event
 app.on('before-quit', () => {
   isQuitting = true;
+  
+  // Stop UDP discovery
+  stopUDPDiscovery();
   
   // Kill the backend process
   if (backendProcess) {

@@ -75,6 +75,7 @@ function FileTransferItem({ transfer, onCancel, onRetry, onOpen }) {
       
       <Typography variant="body2" color="text.secondary" gutterBottom>
         {formatFileSize(transfer.fileSize)} - {transfer.direction === 'upload' ? 'Sending to' : 'Receiving from'} {transfer.peerName}
+        {transfer.groupName && ` (${transfer.groupName})`}
       </Typography>
       
       {/* Progress bar for in-progress transfers */}

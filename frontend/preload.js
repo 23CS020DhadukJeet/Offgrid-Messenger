@@ -49,7 +49,8 @@ contextBridge.exposeInMainWorld(
         'file-not-found',
         'backend-log',
         'backend-error',
-        'backend-stopped'
+        'backend-stopped',
+        'peer-discovered'
       ];
       if (validChannels.includes(channel)) {
         // Deliberately strip event as it includes `sender` 
@@ -66,7 +67,8 @@ contextBridge.exposeInMainWorld(
         'file-not-found',
         'backend-log',
         'backend-error',
-        'backend-stopped'
+        'backend-stopped',
+        'peer-discovered'
       ];
       if (validChannels.includes(channel)) {
         ipcRenderer.removeAllListeners(channel);

@@ -20,6 +20,13 @@
 let ws = null;
 
 /**
+ * Connected peers WebSocket connections
+ * Maps peer ID to WebSocket connection
+ * @type {Map<string, WebSocket>}
+ */
+let peerConnections = new Map();
+
+/**
  * Connection configuration constants
  */
 const WS_PORT = 8080; // WebSocket server port
@@ -280,6 +287,134 @@ function isConnected() {
 }
 
 /**
+ * Connect to a discovered peer
+ * 
+ * @param {Object} peer - Peer information
+ * @param {string} peer.id - Peer ID
+ * @param {string} peer.ip - Peer IP address
+ * @param {number} peer.port - Peer WebSocket port
+ * @returns {Promise<boolean>} - True if connection successful, false otherwise
+ */
+function connectToPeer(peer) {
+  return new Promise((resolve) => {
+    try {
+      // Check if already connected to this peer
+      if (peerConnections.has(peer.id)) {
+        const existingConnection = peerConnections.get(peer.id);
+        if (existingConnection.readyState === WebSocket.OPEN) {
+          console.log(`Already connected to peer ${peer.id}`);
+          resolve(true);
+          return;
+        } else {
+          // Remove stale connection
+          peerConnections.delete(peer.id);
+        }
+      }
+      
+      // Create WebSocket connection to peer
+      const peerWs = new WebSocket(`ws://${peer.ip}:${peer.port}`);
+      
+      peerWs.onopen = () => {
+        console.log(`Connected to peer ${peer.id}`);
+        peerConnections.set(peer.id, peerWs);
+        resolve(true);
+      };
+      
+      peerWs.onclose = (event) => {
+        console.log(`Connection to peer ${peer.id} closed: ${event.code} ${event.reason}`);
+        peerConnections.delete(peer.id);
+        resolve(false);
+      };
+      
+      peerWs.onerror = (error) => {
+        console.error(`Error connecting to peer ${peer.id}:`, error);
+        peerConnections.delete(peer.id);
+        resolve(false);
+      };
+      
+      peerWs.onmessage = (event) => {
+        // Forward peer messages to the main message handler
+        if (handlers.onMessage) {
+          handlers.onMessage(event.data);
+        }
+      };
+      
+    } catch (error) {
+      console.error(`Error creating connection to peer ${peer.id}:`, error);
+      resolve(false);
+    }
+  });
+}
+
+/**
+ * Disconnect from a peer
+ * 
+ * @param {string} peerId - Peer ID to disconnect from
+ */
+function disconnectFromPeer(peerId) {
+  const peerWs = peerConnections.get(peerId);
+  if (peerWs) {
+    peerWs.close(1000, 'Disconnected by user');
+    peerConnections.delete(peerId);
+    console.log(`Disconnected from peer ${peerId}`);
+  }
+}
+
+/**
+ * Send message to a specific peer
+ * 
+ * @param {string} peerId - Peer ID to send message to
+ * @param {Object} message - Message object to send
+ * @returns {boolean} - True if message was sent successfully, false otherwise
+ */
+function sendMessageToPeer(peerId, message) {
+  const peerWs = peerConnections.get(peerId);
+  
+  if (!peerWs || peerWs.readyState !== WebSocket.OPEN) {
+    console.error(`Cannot send message to peer ${peerId}: Connection not open`);
+    return false;
+  }
+  
+  try {
+    peerWs.send(JSON.stringify(message));
+    return true;
+  } catch (error) {
+    console.error(`Error sending message to peer ${peerId}:`, error);
+    return false;
+  }
+}
+
+/**
+ * Get connected peers
+ * 
+ * @returns {Array} Array of connected peer IDs
+ */
+function getConnectedPeers() {
+  return Array.from(peerConnections.keys());
+}
+
+/**
+ * Check if connected to a specific peer
+ * 
+ * @param {string} peerId - Peer ID to check
+ * @returns {boolean} - True if connected to the peer
+ */
+function isConnectedToPeer(peerId) {
+  const peerWs = peerConnections.get(peerId);
+  return peerWs && peerWs.readyState === WebSocket.OPEN;
+}
+
+/**
+ * Close all peer connections
+ */
+function closeAllPeerConnections() {
+  peerConnections.forEach((peerWs, peerId) => {
+    peerWs.close(1000, 'Application closing');
+  });
+  peerConnections.clear();
+}
+
+/**
  * Export the WebSocket service API
  * 
  * These functions provide the public interface for the WebSocket service:
@@ -287,10 +422,22 @@ function isConnected() {
  * - sendMessage: Send data to the server
  * - closeWebSocket: Terminate the connection cleanly
  * - isConnected: Check connection status
+ * - connectToPeer: Connect to a discovered peer
+ * - disconnectFromPeer: Disconnect from a peer
+ * - sendMessageToPeer: Send message to a specific peer
+ * - getConnectedPeers: Get list of connected peers
+ * - isConnectedToPeer: Check if connected to a specific peer
+ * - closeAllPeerConnections: Close all peer connections
  */
 export {
   initializeWebSocket,
   sendMessage,
   closeWebSocket,
-  isConnected
+  isConnected,
+  connectToPeer,
+  disconnectFromPeer,
+  sendMessageToPeer,
+  getConnectedPeers,
+  isConnectedToPeer,
+  closeAllPeerConnections
 };

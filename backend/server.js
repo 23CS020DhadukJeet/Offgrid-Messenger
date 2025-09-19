@@ -14,6 +14,21 @@ const { encryptMessage, decryptMessage } = require('./encryption');
 const { addPeer, removePeer, getPeers, broadcastToPeers } = require('./peers');
 const { handleFileTransferRequest } = require('./fileTransfer');
 const { registerUser, loginUser, getUserById, updateUser } = require('./userAuth');
+const { 
+  createGroup, 
+  getGroup, 
+  getUserGroups, 
+  addMemberToGroup, 
+  removeMemberFromGroup, 
+  isGroupMember, 
+  addGroupMessage, 
+  getGroupMessages, 
+  addGroupFileTransfer, 
+  getGroupFileTransfers, 
+  deleteGroup, 
+  getGroupFilePath, 
+  broadcastToGroupMembers 
+} = require('./groupManager');
 
 // Configuration
 const WS_PORT = 8080;
@@ -88,6 +103,149 @@ const server = http.createServer((req, res) => {
         res.setHeader('Content-Type', 'application/json');
         res.writeHead(result.success ? 200 : 401);
         res.end(JSON.stringify(result));
+      } catch (error) {
+        res.writeHead(400);
+        res.end(JSON.stringify({ success: false, message: 'Invalid request' }));
+      }
+    });
+  } else if (pathname === '/api/groups' && req.method === 'POST') {
+    // Create new group
+    let body = '';
+    req.on('data', chunk => {
+      body += chunk.toString();
+    });
+    req.on('end', () => {
+      try {
+        const { groupName, creatorId, memberIds } = JSON.parse(body);
+        const group = createGroup(groupName, creatorId, memberIds || []);
+        
+        res.setHeader('Content-Type', 'application/json');
+        res.writeHead(200);
+        res.end(JSON.stringify({ success: true, group }));
+      } catch (error) {
+        res.writeHead(400);
+        res.end(JSON.stringify({ success: false, message: 'Invalid request' }));
+      }
+    });
+  } else if ((pathname === '/api/groups' || pathname.startsWith('/api/groups/')) && req.method === 'GET') {
+    // Get user groups or specific group
+    const pathParts = pathname.split('/');
+    if (pathParts.length === 3) {
+      // Get user groups
+      const userId = parsedUrl.query.userId;
+      if (!userId) {
+        res.writeHead(400);
+        res.end(JSON.stringify({ success: false, message: 'User ID required' }));
+        return;
+      }
+      
+      const userGroups = getUserGroups(userId);
+      res.setHeader('Content-Type', 'application/json');
+      res.writeHead(200);
+      res.end(JSON.stringify({ success: true, groups: userGroups }));
+    } else if (pathParts.length === 4) {
+      // Get specific group
+      const groupId = pathParts[3];
+      const group = getGroup(groupId);
+      
+      res.setHeader('Content-Type', 'application/json');
+      res.writeHead(group ? 200 : 404);
+      res.end(JSON.stringify({ success: !!group, group }));
+    }
+  } else if (pathname.startsWith('/api/groups/') && pathname.includes('/members') && req.method === 'POST') {
+    // Add member to group
+    const pathParts = pathname.split('/');
+    const groupId = pathParts[3];
+    
+    let body = '';
+    req.on('data', chunk => {
+      body += chunk.toString();
+    });
+    req.on('end', () => {
+      try {
+        const { userId, addedBy } = JSON.parse(body);
+        const success = addMemberToGroup(groupId, userId, addedBy);
+        
+        res.setHeader('Content-Type', 'application/json');
+        res.writeHead(success ? 200 : 400);
+        res.end(JSON.stringify({ success }));
+      } catch (error) {
+        res.writeHead(400);
+        res.end(JSON.stringify({ success: false, message: 'Invalid request' }));
+      }
+    });
+  } else if (pathname.startsWith('/api/groups/') && pathname.includes('/members') && req.method === 'DELETE') {
+    // Remove member from group
+    const pathParts = pathname.split('/');
+    const groupId = pathParts[3];
+    
+    let body = '';
+    req.on('data', chunk => {
+      body += chunk.toString();
+    });
+    req.on('end', () => {
+      try {
+        const { userId, removedBy } = JSON.parse(body);
+        const success = removeMemberFromGroup(groupId, userId, removedBy);
+        
+        res.setHeader('Content-Type', 'application/json');
+        res.writeHead(success ? 200 : 400);
+        res.end(JSON.stringify({ success }));
+      } catch (error) {
+        res.writeHead(400);
+        res.end(JSON.stringify({ success: false, message: 'Invalid request' }));
+      }
+    });
+  } else if (pathname.startsWith('/api/groups/') && pathname.includes('/messages') && req.method === 'GET') {
+    // Get group messages
+    const pathParts = pathname.split('/');
+    const groupId = pathParts[3];
+    const userId = parsedUrl.query.userId;
+    const limit = parseInt(parsedUrl.query.limit) || 100;
+    
+    if (!userId) {
+      res.writeHead(400);
+      res.end(JSON.stringify({ success: false, message: 'User ID required' }));
+      return;
+    }
+    
+    const messages = getGroupMessages(groupId, userId, limit);
+    res.setHeader('Content-Type', 'application/json');
+    res.writeHead(200);
+    res.end(JSON.stringify({ success: true, messages }));
+  } else if (pathname.startsWith('/api/groups/') && pathname.includes('/files') && req.method === 'GET') {
+    // Get group file transfers
+    const pathParts = pathname.split('/');
+    const groupId = pathParts[3];
+    const userId = parsedUrl.query.userId;
+    
+    if (!userId) {
+      res.writeHead(400);
+      res.end(JSON.stringify({ success: false, message: 'User ID required' }));
+      return;
+    }
+    
+    const files = getGroupFileTransfers(groupId, userId);
+    res.setHeader('Content-Type', 'application/json');
+    res.writeHead(200);
+    res.end(JSON.stringify({ success: true, files }));
+  } else if (pathname.startsWith('/api/groups/') && req.method === 'DELETE') {
+    // Delete group
+    const pathParts = pathname.split('/');
+    const groupId = pathParts[3];
+    
+    let body = '';
+    req.on('data', chunk => {
+      body += chunk.toString();
+    });
+    req.on('end', () => {
+      try {
+        const { userId } = JSON.parse(body);
+        const success = deleteGroup(groupId, userId);
+        
+        res.setHeader('Content-Type', 'application/json');
+        res.writeHead(success ? 200 : 400);
+        res.end(JSON.stringify({ success }));
       } catch (error) {
         res.writeHead(400);
         res.end(JSON.stringify({ success: false, message: 'Invalid request' }));
@@ -205,6 +363,145 @@ wss.on('connection', (ws, req) => {
           }
           break;
           
+        case 'group_chat':
+          // Handle group chat message
+          console.log(`Group chat message from ${peerId} to group ${parsedMessage.groupId}`);
+          
+          // Verify user is member of group
+          if (!isGroupMember(parsedMessage.groupId, peerId)) {
+            console.log(`User ${peerId} is not a member of group ${parsedMessage.groupId}`);
+            break;
+          }
+          
+          // Add message to group
+          const groupMessage = {
+            type: 'group_chat',
+            groupId: parsedMessage.groupId,
+            senderId: peerId,
+            content: parsedMessage.content,
+            timestamp: Date.now()
+          };
+          
+          if (addGroupMessage(parsedMessage.groupId, groupMessage)) {
+            // Broadcast to all group members
+            broadcastToGroupMembers(parsedMessage.groupId, groupMessage, (memberId, message) => {
+              const targetPeer = getPeers().find(p => p.id === memberId);
+              if (targetPeer && targetPeer.socket.readyState === WebSocket.OPEN) {
+                return targetPeer.socket.send(encryptMessage(message));
+              }
+              return false;
+            });
+          }
+          break;
+          
+        case 'group_file_request':
+          // Handle group file transfer request
+          console.log(`Group file transfer request from ${peerId} to group ${parsedMessage.groupId}`);
+          
+          // Verify user is member of group
+          if (!isGroupMember(parsedMessage.groupId, peerId)) {
+            console.log(`User ${peerId} is not a member of group ${parsedMessage.groupId}`);
+            break;
+          }
+          
+          // Add file transfer to group
+          const groupFileTransfer = {
+            transferId: parsedMessage.transferId,
+            fileName: parsedMessage.fileName,
+            fileSize: parsedMessage.fileSize,
+            senderId: peerId,
+            groupId: parsedMessage.groupId,
+            timestamp: Date.now()
+          };
+          
+          if (addGroupFileTransfer(parsedMessage.groupId, groupFileTransfer)) {
+            // Broadcast to all group members
+            const fileRequestMessage = {
+              type: 'group_file_request',
+              groupId: parsedMessage.groupId,
+              transferId: parsedMessage.transferId,
+              fileName: parsedMessage.fileName,
+              fileSize: parsedMessage.fileSize,
+              senderId: peerId,
+              timestamp: Date.now()
+            };
+            
+            broadcastToGroupMembers(parsedMessage.groupId, fileRequestMessage, (memberId, message) => {
+              const targetPeer = getPeers().find(p => p.id === memberId);
+              if (targetPeer && targetPeer.socket.readyState === WebSocket.OPEN) {
+                return targetPeer.socket.send(encryptMessage(message));
+              }
+              return false;
+            });
+          }
+          break;
+          
+        case 'group_file_chunk':
+          // Handle group file chunk
+          console.log(`Group file chunk received from ${peerId} for group ${parsedMessage.groupId}`);
+          
+          // Verify user is member of group
+          if (!isGroupMember(parsedMessage.groupId, peerId)) {
+            console.log(`User ${peerId} is not a member of group ${parsedMessage.groupId}`);
+            break;
+          }
+          
+          // Broadcast chunk to all group members except sender
+          const chunkMessage = {
+            type: 'group_file_chunk',
+            groupId: parsedMessage.groupId,
+            transferId: parsedMessage.transferId,
+            chunkIndex: parsedMessage.chunkIndex,
+            totalChunks: parsedMessage.totalChunks,
+            chunkSize: parsedMessage.chunkSize,
+            data: parsedMessage.data,
+            senderId: peerId,
+            timestamp: Date.now()
+          };
+          
+          broadcastToGroupMembers(parsedMessage.groupId, chunkMessage, (memberId, message) => {
+            // Don't send back to sender
+            if (memberId === peerId) return false;
+            
+            const targetPeer = getPeers().find(p => p.id === memberId);
+            if (targetPeer && targetPeer.socket.readyState === WebSocket.OPEN) {
+              return targetPeer.socket.send(encryptMessage(message));
+            }
+            return false;
+          });
+          break;
+          
+        case 'group_file_complete':
+          // Handle group file transfer completion
+          console.log(`Group file transfer completed from ${peerId} for group ${parsedMessage.groupId}`);
+          
+          // Verify user is member of group
+          if (!isGroupMember(parsedMessage.groupId, peerId)) {
+            console.log(`User ${peerId} is not a member of group ${parsedMessage.groupId}`);
+            break;
+          }
+          
+          // Broadcast completion to all group members except sender
+          const completeMessage = {
+            type: 'group_file_complete',
+            groupId: parsedMessage.groupId,
+            transferId: parsedMessage.transferId,
+            senderId: peerId,
+            timestamp: Date.now()
+          };
+          
+          broadcastToGroupMembers(parsedMessage.groupId, completeMessage, (memberId, message) => {
+            // Don't send back to sender
+            if (memberId === peerId) return false;
+            
+            const targetPeer = getPeers().find(p => p.id === memberId);
+            if (targetPeer && targetPeer.socket.readyState === WebSocket.OPEN) {
+              return targetPeer.socket.send(encryptMessage(message));
+            }
+            return false;
+          });
+          break;
+          
         default:
           console.log(`Unknown message type from ${peerId}: ${parsedMessage.type}`);
       }
@@ -239,6 +536,11 @@ udpSocket.on('message', (msg, rinfo) => {
     const message = JSON.parse(msg.toString());
     
     if (message.type === 'discovery') {
+      // Don't respond to our own discovery messages
+      if (rinfo.address === localIp) {
+        return;
+      }
+      
       console.log(`Discovery message from ${rinfo.address}:${rinfo.port}`);
       
       // Send a response with our information
