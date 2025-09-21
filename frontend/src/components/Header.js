@@ -25,8 +25,9 @@ import NotificationsIcon from '@mui/icons-material/Notifications';
 import HistoryIcon from '@mui/icons-material/History';
 import LogoutIcon from '@mui/icons-material/Logout';
 import AccountCircleIcon from '@mui/icons-material/AccountCircle';
+import AnnouncementIcon from '@mui/icons-material/Announcement';
 
-function Header({ connected, shareClipboard, selectedPeer, onOpenSettings, onOpenFileHistory, user, onLogout }) {
+function Header({ connected, shareClipboard, selectedPeer, onOpenSettings, onOpenFileHistory, onOpenBulletinBoard, user, onLogout }) {
   const [anchorEl, setAnchorEl] = React.useState(null);
   const open = Boolean(anchorEl);
   
@@ -85,6 +86,13 @@ function Header({ connected, shareClipboard, selectedPeer, onOpenSettings, onOpe
         <Tooltip title="File Transfer History">
           <IconButton color="inherit" onClick={onOpenFileHistory}>
             <HistoryIcon />
+          </IconButton>
+        </Tooltip>
+        
+        {/* Bulletin Board button */}
+        <Tooltip title="Bulletin Board">
+          <IconButton color="inherit" onClick={onOpenBulletinBoard}>
+            <AnnouncementIcon />
           </IconButton>
         </Tooltip>
         

@@ -29,6 +29,16 @@ const {
   getGroupFilePath, 
   broadcastToGroupMembers 
 } = require('./groupManager');
+const {
+  createGeneralAnnouncement,
+  createGroupAnnouncement,
+  getGeneralAnnouncements,
+  getGroupAnnouncements,
+  getAnnouncement,
+  updateAnnouncement,
+  deleteAnnouncement,
+  getUserVisibleAnnouncements
+} = require('./bulletinBoard');
 
 // Configuration
 const WS_PORT = 8080;
@@ -196,6 +206,159 @@ const server = http.createServer((req, res) => {
         res.end(JSON.stringify({ success: false, message: 'Invalid request' }));
       }
     });
+  } else if (pathname === '/api/bulletins/general' && req.method === 'POST') {
+    // Create general announcement
+    let body = '';
+    req.on('data', chunk => {
+      body += chunk.toString();
+    });
+    req.on('end', () => {
+      try {
+        const { title, content, authorId, priority } = JSON.parse(body);
+        const announcement = createGeneralAnnouncement(title, content, authorId, priority);
+        
+        res.setHeader('Content-Type', 'application/json');
+        res.writeHead(200);
+        res.end(JSON.stringify({ success: true, announcement }));
+      } catch (error) {
+        res.writeHead(400);
+        res.end(JSON.stringify({ success: false, message: 'Invalid request' }));
+      }
+    });
+  } else if (pathname === '/api/bulletins/general' && req.method === 'GET') {
+    // Get all general announcements
+    const announcements = getGeneralAnnouncements();
+    
+    res.setHeader('Content-Type', 'application/json');
+    res.writeHead(200);
+    res.end(JSON.stringify({ success: true, announcements }));
+  } else if (pathname.startsWith('/api/bulletins/general/') && req.method === 'GET') {
+    // Get specific general announcement
+    const pathParts = pathname.split('/');
+    const announcementId = pathParts[4];
+    const announcement = getAnnouncement(announcementId);
+    
+    res.setHeader('Content-Type', 'application/json');
+    res.writeHead(announcement ? 200 : 404);
+    res.end(JSON.stringify({ success: !!announcement, announcement }));
+  } else if (pathname.startsWith('/api/bulletins/general/') && req.method === 'PUT') {
+    // Update general announcement
+    const pathParts = pathname.split('/');
+    const announcementId = pathParts[4];
+    
+    let body = '';
+    req.on('data', chunk => {
+      body += chunk.toString();
+    });
+    req.on('end', () => {
+      try {
+        const updates = JSON.parse(body);
+        const updatedAnnouncement = updateAnnouncement(announcementId, updates);
+        
+        res.setHeader('Content-Type', 'application/json');
+        res.writeHead(updatedAnnouncement ? 200 : 404);
+        res.end(JSON.stringify({ success: !!updatedAnnouncement, announcement: updatedAnnouncement }));
+      } catch (error) {
+        res.writeHead(400);
+        res.end(JSON.stringify({ success: false, message: 'Invalid request' }));
+      }
+    });
+  } else if (pathname.startsWith('/api/bulletins/general/') && req.method === 'DELETE') {
+    // Delete general announcement
+    const pathParts = pathname.split('/');
+    const announcementId = pathParts[4];
+    const success = deleteAnnouncement(announcementId);
+    
+    res.setHeader('Content-Type', 'application/json');
+    res.writeHead(success ? 200 : 404);
+    res.end(JSON.stringify({ success }));
+  } else if (pathname.startsWith('/api/bulletins/group') && req.method === 'POST') {
+    // Create group announcement
+    let body = '';
+    req.on('data', chunk => {
+      body += chunk.toString();
+    });
+    req.on('end', () => {
+      try {
+        const { title, content, authorId, groupId, priority } = JSON.parse(body);
+        const announcement = createGroupAnnouncement(title, content, authorId, groupId, priority);
+        
+        res.setHeader('Content-Type', 'application/json');
+        res.writeHead(200);
+        res.end(JSON.stringify({ success: true, announcement }));
+      } catch (error) {
+        res.writeHead(400);
+        res.end(JSON.stringify({ success: false, message: 'Invalid request' }));
+      }
+    });
+  } else if (pathname.startsWith('/api/bulletins/group/') && pathname.includes('/announcements') && req.method === 'GET') {
+    // Get group announcements
+    const pathParts = pathname.split('/');
+    const groupId = pathParts[4];
+    const announcements = getGroupAnnouncements(groupId);
+    
+    res.setHeader('Content-Type', 'application/json');
+    res.writeHead(200);
+    res.end(JSON.stringify({ success: true, announcements }));
+  } else if (pathname.startsWith('/api/bulletins/group/') && pathname.includes('/announcements/') && req.method === 'GET') {
+    // Get specific group announcement
+    const pathParts = pathname.split('/');
+    const groupId = pathParts[4];
+    const announcementId = pathParts[6];
+    const announcement = getAnnouncement(announcementId, groupId);
+    
+    res.setHeader('Content-Type', 'application/json');
+    res.writeHead(announcement ? 200 : 404);
+    res.end(JSON.stringify({ success: !!announcement, announcement }));
+  } else if (pathname.startsWith('/api/bulletins/group/') && pathname.includes('/announcements/') && req.method === 'PUT') {
+    // Update group announcement
+    const pathParts = pathname.split('/');
+    const groupId = pathParts[4];
+    const announcementId = pathParts[6];
+    
+    let body = '';
+    req.on('data', chunk => {
+      body += chunk.toString();
+    });
+    req.on('end', () => {
+      try {
+        const updates = JSON.parse(body);
+        const updatedAnnouncement = updateAnnouncement(announcementId, updates, groupId);
+        
+        res.setHeader('Content-Type', 'application/json');
+        res.writeHead(updatedAnnouncement ? 200 : 404);
+        res.end(JSON.stringify({ success: !!updatedAnnouncement, announcement: updatedAnnouncement }));
+      } catch (error) {
+        res.writeHead(400);
+        res.end(JSON.stringify({ success: false, message: 'Invalid request' }));
+      }
+    });
+  } else if (pathname.startsWith('/api/bulletins/group/') && pathname.includes('/announcements/') && req.method === 'DELETE') {
+    // Delete group announcement
+    const pathParts = pathname.split('/');
+    const groupId = pathParts[4];
+    const announcementId = pathParts[6];
+    const success = deleteAnnouncement(announcementId, groupId);
+    
+    res.setHeader('Content-Type', 'application/json');
+    res.writeHead(success ? 200 : 404);
+    res.end(JSON.stringify({ success }));
+  } else if (pathname === '/api/bulletins/user' && req.method === 'GET') {
+    // Get all announcements visible to a user
+    const userId = parsedUrl.query.userId;
+    const userGroupIds = parsedUrl.query.groupIds ? parsedUrl.query.groupIds.split(',') : [];
+    
+    if (!userId) {
+      res.writeHead(400);
+      res.end(JSON.stringify({ success: false, message: 'User ID required' }));
+      return;
+    }
+    
+    const announcements = getUserVisibleAnnouncements(userId, userGroupIds);
+    
+    res.setHeader('Content-Type', 'application/json');
+    res.writeHead(200);
+    res.end(JSON.stringify({ success: true, announcements }));
   } else if (pathname.startsWith('/api/groups/') && pathname.includes('/messages') && req.method === 'GET') {
     // Get group messages
     const pathParts = pathname.split('/');
@@ -267,6 +430,69 @@ const udpSocket = dgram.createSocket('udp4');
 
 // Start the server
 server.listen(HTTP_PORT);
+
+// WebSocket message types
+const MESSAGE_TYPES = {
+  CONNECT: 'connect',
+  DISCONNECT: 'disconnect',
+  MESSAGE: 'message',
+  FILE_REQUEST: 'file_request',
+  FILE_CHUNK: 'file_chunk',
+  FILE_COMPLETE: 'file_complete',
+  GROUP_MESSAGE: 'group_message',
+  GROUP_FILE_REQUEST: 'group_file_request',
+  GROUP_FILE_CHUNK: 'group_file_chunk',
+  GROUP_FILE_COMPLETE: 'group_file_complete',
+  GENERAL_ANNOUNCEMENT: 'general_announcement',
+  GROUP_ANNOUNCEMENT: 'group_announcement',
+  ERROR: 'error'
+};
+
+// Handle general announcement
+function handleGeneralAnnouncement(ws, data) {
+  const { title, content, from, priority } = data;
+  
+  // Create the announcement
+  const announcement = createGeneralAnnouncement(title, content, from, priority || 'medium');
+  
+  // Broadcast to all peers
+  broadcastToPeers(JSON.stringify({
+    type: MESSAGE_TYPES.GENERAL_ANNOUNCEMENT,
+    announcement,
+    from
+  }));
+}
+
+// Handle group announcement
+function handleGroupAnnouncement(ws, data) {
+  const { groupId, title, content, from, priority } = data;
+  
+  // Verify user is member of group
+  if (!isGroupMember(groupId, from)) {
+    ws.send(JSON.stringify({
+      type: MESSAGE_TYPES.ERROR,
+      message: 'You are not a member of this group'
+    }));
+    return;
+  }
+  
+  // Create the announcement
+  const announcement = createGroupAnnouncement(title, content, from, groupId, priority || 'medium');
+  
+  // Broadcast to all group members
+  broadcastToGroupMembers(groupId, {
+    type: MESSAGE_TYPES.GROUP_ANNOUNCEMENT,
+    groupId,
+    announcement,
+    from
+  }, (memberId, message) => {
+    const targetPeer = getPeers().find(p => p.id === memberId);
+    if (targetPeer && targetPeer.socket.readyState === WebSocket.OPEN) {
+      return targetPeer.socket.send(encryptMessage(JSON.stringify(message)));
+    }
+    return false;
+  });
+}
 
 // Handle WebSocket connections
 wss.on('connection', (ws, req) => {
@@ -434,6 +660,66 @@ wss.on('connection', (ws, req) => {
               return false;
             });
           }
+          break;
+          
+        case 'general_announcement':
+          // Handle general announcement
+          console.log(`General announcement from ${peerId}: ${parsedMessage.title}`);
+          
+          // Create the announcement
+          const generalAnnouncement = createGeneralAnnouncement(
+            parsedMessage.title,
+            parsedMessage.content,
+            peerId,
+            parsedMessage.priority || 'normal'
+          );
+          
+          // Broadcast to all peers
+          const announcementMessage = {
+            type: 'general_announcement',
+            from: peerId,
+            announcement: generalAnnouncement,
+            timestamp: Date.now()
+          };
+          
+          broadcastToPeers(JSON.stringify(announcementMessage));
+          break;
+          
+        case 'group_announcement':
+          // Handle group announcement
+          console.log(`Group announcement from ${peerId} to group ${parsedMessage.groupId}`);
+          
+          // Verify user is member of group
+          if (!isGroupMember(parsedMessage.groupId, peerId)) {
+            console.log(`User ${peerId} is not a member of group ${parsedMessage.groupId}`);
+            break;
+          }
+          
+          // Create the announcement
+          const groupAnnouncement = createGroupAnnouncement(
+            parsedMessage.title,
+            parsedMessage.content,
+            peerId,
+            parsedMessage.groupId,
+            parsedMessage.priority || 'normal'
+          );
+          
+          // Broadcast to all group members
+          const groupAnnouncementMessage = {
+            type: 'group_announcement',
+            groupId: parsedMessage.groupId,
+            from: peerId,
+            announcement: groupAnnouncement,
+            timestamp: Date.now()
+          };
+          
+          broadcastToGroupMembers(parsedMessage.groupId, groupAnnouncementMessage, (memberId, message) => {
+            const targetPeer = getPeers().find(p => p.id === memberId);
+            if (targetPeer && targetPeer.socket.readyState === WebSocket.OPEN) {
+              return targetPeer.socket.send(encryptMessage(message));
+            }
+            return false;
+          });
           break;
           
         case 'group_file_chunk':

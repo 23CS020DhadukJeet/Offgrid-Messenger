@@ -11,6 +11,11 @@ import CssBaseline from '@mui/material/CssBaseline';
 import Box from '@mui/material/Box';
 import Snackbar from '@mui/material/Snackbar';
 import Alert from '@mui/material/Alert';
+import Dialog from '@mui/material/Dialog';
+import DialogTitle from '@mui/material/DialogTitle';
+import DialogContent from '@mui/material/DialogContent';
+import IconButton from '@mui/material/IconButton';
+import CloseIcon from '@mui/icons-material/Close';
 
 // Import NotificationManager
 import NotificationManager from './components/NotificationManager';
@@ -25,6 +30,8 @@ import FileTransferHistory from './components/FileTransferHistory';
 import ConnectionStatus from './components/ConnectionStatus';
 import Settings from './components/Settings';
 import Login from './components/Login';
+import BulletinBoard from './components/BulletinBoard';
+import BulletinNotification from './components/BulletinNotification';
 
 // Import auth service
 import { isLoggedIn, getCurrentUser, logoutUser } from './services/authService';
@@ -41,6 +48,13 @@ import {
   getUserGroups, 
   sendGroupMessage 
 } from './services/groupService';
+
+// Import bulletin board service
+import {
+  getGeneralAnnouncements,
+  getGroupAnnouncements,
+  getUserVisibleAnnouncements
+} from './services/bulletinService';
 import { 
   sendFileToGroup as sendFileToGroupService, 
   handleGroupFileRequest, 
@@ -99,6 +113,12 @@ function App() {
   // State for file transfer history dialog
   const [fileTransferHistoryOpen, setFileTransferHistoryOpen] = useState(false);
   
+  // State for bulletin board dialog
+  const [bulletinBoardOpen, setBulletinBoardOpen] = useState(false);
+  
+  // State for bulletin board announcements
+  const [announcements, setAnnouncements] = useState([]);
+  
   // State for theme mode
   const [darkMode, setDarkMode] = useState(false);
   
@@ -121,6 +141,22 @@ function App() {
       },
     },
   }), [darkMode]);
+  
+  // Fetch announcements on component mount
+  useEffect(() => {
+    if (isAuthenticated && user) {
+      const fetchAnnouncements = async () => {
+        try {
+          const userAnnouncements = await getUserVisibleAnnouncements();
+          setAnnouncements(userAnnouncements);
+        } catch (error) {
+          console.error('Error fetching announcements:', error);
+        }
+      };
+      
+      fetchAnnouncements();
+    }
+  }, [isAuthenticated, user, groups]);
   
   // Initialize WebSocket connection and peer discovery
   useEffect(() => {
@@ -203,6 +239,14 @@ function App() {
             
           case 'group_file_complete':
             handleGroupFileComplete(data);
+            break;
+            
+          case 'GENERAL_ANNOUNCEMENT':
+            handleGeneralAnnouncement(data);
+            break;
+            
+          case 'GROUP_ANNOUNCEMENT':
+            handleGroupAnnouncement(data);
             break;
             
           default:
@@ -394,6 +438,48 @@ function App() {
           body: content
         });
       }
+    }
+  };
+  
+  // Handle general announcements
+  const handleGeneralAnnouncement = (data) => {
+    const { announcement } = data;
+    
+    // Add to announcements list
+    setAnnouncements(prev => [announcement, ...prev]);
+    
+    // Show notification
+    showNotification(`New general announcement: ${announcement.title}`, 'info');
+    
+    // Show system notification if window is not focused
+    if (document.hidden) {
+      window.electron.showNotification({
+        title: 'New General Announcement',
+        body: announcement.title
+      });
+    }
+  };
+  
+  // Handle group announcements
+  const handleGroupAnnouncement = (data) => {
+    const { announcement, groupId } = data;
+    
+    // Add to announcements list
+    setAnnouncements(prev => [{ ...announcement, groupId }, ...prev]);
+    
+    // Get group name
+    const group = groups.find(g => g.id === groupId);
+    const groupName = group ? group.name : groupId;
+    
+    // Show notification
+    showNotification(`New announcement in ${groupName}: ${announcement.title}`, 'info');
+    
+    // Show system notification if window is not focused
+    if (document.hidden) {
+      window.electron.showNotification({
+        title: `New Announcement in ${groupName}`,
+        body: announcement.title
+      });
     }
   };
   
@@ -777,6 +863,7 @@ function App() {
             selectedPeer={selectedPeer}
             onOpenSettings={() => setSettingsOpen(true)}
             onOpenFileHistory={handleOpenFileHistory}
+            onOpenBulletinBoard={() => setBulletinBoardOpen(true)}
             user={user}
             onLogout={handleLogout}
           />
@@ -844,6 +931,30 @@ function App() {
             onDismiss={dismissNotification} 
           />
           
+          {/* Bulletin Board Notifications */}
+          <Box 
+            sx={{ 
+              position: 'fixed',
+              top: 80,
+              right: 16,
+              width: 350,
+              maxHeight: '30vh',
+              overflow: 'auto',
+              zIndex: 1000,
+              display: 'flex',
+              flexDirection: 'column'
+            }}
+          >
+            {announcements.slice(0, 3).map((announcement) => (
+              <BulletinNotification
+                key={announcement.id}
+                announcement={announcement}
+                onClose={() => setAnnouncements(prev => prev.filter(a => a.id !== announcement.id))}
+                onClick={() => setBulletinBoardOpen(true)}
+              />
+            ))}
+          </Box>
+          
           {/* Settings dialog */}
           <Settings
             open={settingsOpen}
@@ -866,10 +977,38 @@ function App() {
           />
           
           {/* File transfer history dialog */}
-          <FileTransferHistory
-            open={fileTransferHistoryOpen}
-            onClose={() => setFileTransferHistoryOpen(false)}
+          <FileTransferHistory 
+            open={fileTransferHistoryOpen} 
+            onClose={() => setFileTransferHistoryOpen(false)} 
           />
+          
+          {/* Bulletin Board Dialog */}
+          {bulletinBoardOpen && (
+            <Dialog
+              open={bulletinBoardOpen}
+              onClose={() => setBulletinBoardOpen(false)}
+              maxWidth="md"
+              fullWidth
+            >
+              <DialogTitle>
+                Bulletin Board
+                <IconButton
+                  aria-label="close"
+                  onClick={() => setBulletinBoardOpen(false)}
+                  sx={{ position: 'absolute', right: 8, top: 8 }}
+                >
+                  <CloseIcon />
+                </IconButton>
+              </DialogTitle>
+              <DialogContent dividers>
+                <BulletinBoard 
+                  userId={user?.id} 
+                  userGroups={groups} 
+                  selectedGroup={selectedGroup} 
+                />
+              </DialogContent>
+            </Dialog>
+          )}
         </Box>
       )}
     </ThemeProvider>
