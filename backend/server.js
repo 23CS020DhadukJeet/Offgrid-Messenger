@@ -46,20 +46,57 @@ const HTTP_PORT = 8080; // Using same port for HTTP and WebSocket
 const UDP_PORT = 8081;
 const BROADCAST_INTERVAL = 5000; // milliseconds
 
-// Get local IP address
-function getLocalIpAddress() {
+// Get all local IP addresses
+function getAllLocalIpAddresses() {
   const interfaces = os.networkInterfaces();
+  const addresses = [];
+  
   for (const name of Object.keys(interfaces)) {
     for (const iface of interfaces[name]) {
       // Skip over non-IPv4 and internal (loopback) addresses
       if (iface.family === 'IPv4' && !iface.internal) {
-        return iface.address;
+        addresses.push({
+          address: iface.address,
+          netmask: iface.netmask,
+          name: name
+        });
       }
     }
   }
-  return '127.0.0.1'; // Fallback to localhost if no other IP is found
+  
+  // If no addresses found, add localhost
+  if (addresses.length === 0) {
+    addresses.push({
+      address: '127.0.0.1',
+      netmask: '255.0.0.0',
+      name: 'loopback'
+    });
+  }
+  
+  return addresses;
 }
 
+// Get primary local IP address
+function getLocalIpAddress() {
+  const addresses = getAllLocalIpAddresses();
+  return addresses.length > 0 ? addresses[0].address : '127.0.0.1';
+}
+
+// Calculate subnet broadcast address
+function getSubnetBroadcast(ipAddress, netmask) {
+  const ip = ipAddress.split('.').map(Number);
+  const mask = netmask.split('.').map(Number);
+  const broadcast = [];
+  
+  for (let i = 0; i < 4; i++) {
+    // For each octet, calculate the broadcast address
+    broadcast.push(ip[i] | (~mask[i] & 255));
+  }
+  
+  return broadcast.join('.');
+}
+
+const localIpAddresses = getAllLocalIpAddresses();
 const localIp = getLocalIpAddress();
 const hostname = os.hostname();
 
@@ -67,7 +104,7 @@ const hostname = os.hostname();
 const server = http.createServer((req, res) => {
   // Set CORS headers
   res.setHeader('Access-Control-Allow-Origin', '*');
-  res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
+  res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS, PUT, DELETE');
   res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
   
   // Handle preflight requests
@@ -343,6 +380,48 @@ const server = http.createServer((req, res) => {
     res.setHeader('Content-Type', 'application/json');
     res.writeHead(success ? 200 : 404);
     res.end(JSON.stringify({ success }));
+  } else if (pathname === '/api/peers/connect' && req.method === 'POST') {
+    // Manual peer connection endpoint
+    let body = '';
+    req.on('data', chunk => {
+      body += chunk.toString();
+    });
+    req.on('end', () => {
+      try {
+        const { ip, port } = JSON.parse(body);
+        
+        if (!ip || !port) {
+          res.writeHead(400);
+          res.end(JSON.stringify({ success: false, message: 'IP address and port are required' }));
+          return;
+        }
+        
+        // Attempt to connect to the peer
+        const peerUrl = `ws://${ip}:${port}`;
+        console.log(`Attempting manual connection to peer at ${peerUrl}`);
+        
+        // Create a new WebSocket connection to the peer
+        const ws = new WebSocket(peerUrl);
+        
+        ws.on('open', () => {
+          const peerId = `${ip}:${port}`;
+          addPeer(peerId, ws, ip);
+          
+          res.setHeader('Content-Type', 'application/json');
+          res.writeHead(200);
+          res.end(JSON.stringify({ success: true, message: 'Connected to peer successfully' }));
+        });
+        
+        ws.on('error', (error) => {
+          console.error(`Failed to connect to peer at ${peerUrl}:`, error.message);
+          res.writeHead(500);
+          res.end(JSON.stringify({ success: false, message: 'Failed to connect to peer' }));
+        });
+      } catch (error) {
+        res.writeHead(400);
+        res.end(JSON.stringify({ success: false, message: 'Invalid request' }));
+      }
+    });
   } else if (pathname === '/api/bulletins/user' && req.method === 'GET') {
     // Get all announcements visible to a user
     const userId = parsedUrl.query.userId;
@@ -863,8 +942,32 @@ udpSocket.bind(UDP_PORT, () => {
     
     const messageBuffer = Buffer.from(JSON.stringify(discoveryMessage));
     
-    // Broadcast to the LAN
-    udpSocket.send(messageBuffer, 0, messageBuffer.length, UDP_PORT, '255.255.255.255');
+    // Broadcast to all network interfaces
+    for (const iface of localIpAddresses) {
+      try {
+        // Calculate subnet broadcast address for this interface
+        const subnetBroadcast = getSubnetBroadcast(iface.address, iface.netmask);
+        console.log(`Broadcasting to subnet ${subnetBroadcast} on interface ${iface.name}`);
+        
+        // Send to subnet broadcast address
+        udpSocket.send(messageBuffer, 0, messageBuffer.length, UDP_PORT, subnetBroadcast);
+        
+        // Also try direct broadcast as fallback
+        udpSocket.send(messageBuffer, 0, messageBuffer.length, UDP_PORT, '255.255.255.255');
+      } catch (error) {
+        console.error(`Error broadcasting on interface ${iface.name}:`, error);
+      }
+    }
+    
+    // Additional discovery method: Try to reach common gateway addresses
+    const gatewayAddresses = ['192.168.0.1', '192.168.1.1', '192.168.43.1', '10.0.0.1', '10.0.0.138'];
+    for (const gateway of gatewayAddresses) {
+      try {
+        udpSocket.send(messageBuffer, 0, messageBuffer.length, UDP_PORT, gateway);
+      } catch (error) {
+        // Silently ignore errors for gateway addresses
+      }
+    }
   }, BROADCAST_INTERVAL);
 });
 

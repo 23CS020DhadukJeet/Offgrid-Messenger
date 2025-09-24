@@ -21,6 +21,13 @@ import Badge from '@mui/material/Badge';
 import LinearProgress from '@mui/material/LinearProgress';
 import Button from '@mui/material/Button';
 import IconButton from '@mui/material/IconButton';
+import TextField from '@mui/material/TextField';
+import Dialog from '@mui/material/Dialog';
+import DialogActions from '@mui/material/DialogActions';
+import DialogContent from '@mui/material/DialogContent';
+import DialogContentText from '@mui/material/DialogContentText';
+import DialogTitle from '@mui/material/DialogTitle';
+import AddIcon from '@mui/icons-material/Add';
 import PersonIcon from '@mui/icons-material/Person';
 import FolderIcon from '@mui/icons-material/Folder';
 import ComputerIcon from '@mui/icons-material/Computer';
@@ -59,9 +66,42 @@ function Sidebar({
   onManageGroups 
 }) {
   const [tabValue, setTabValue] = useState(0);
+  const [openManualConnect, setOpenManualConnect] = useState(false);
+  const [manualIp, setManualIp] = useState('');
+  const [manualPort, setManualPort] = useState('8080');
+  const [connectError, setConnectError] = useState('');
 
   const handleTabChange = (event, newValue) => {
     setTabValue(newValue);
+  };
+  
+  const handleManualConnect = async () => {
+    if (!manualIp) {
+      setConnectError('IP address is required');
+      return;
+    }
+    
+    try {
+      const response = await fetch('/api/peers/connect', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ ip: manualIp, port: manualPort }),
+      });
+      
+      const data = await response.json();
+      
+      if (data.success) {
+        setOpenManualConnect(false);
+        setManualIp('');
+        setConnectError('');
+      } else {
+        setConnectError(data.message || 'Failed to connect to peer');
+      }
+    } catch (error) {
+      setConnectError('Connection error: ' + error.message);
+    }
   };
 
   return (
@@ -100,46 +140,95 @@ function Sidebar({
       
       <Box sx={{ flexGrow: 1, overflow: 'auto' }}>
         <TabPanel value={tabValue} index={0}>
-          {peers.length > 0 ? (
-            <List sx={{ padding: 0 }}>
-              {peers.map((peer) => (
-                <ListItem 
-                  key={peer.id} 
-                  disablePadding
-                  secondaryAction={null}
-                >
-                  <ListItemButton 
-                    selected={selectedPeer && selectedPeer.id === peer.id}
-                    onClick={() => onSelectPeer(peer)}
-                  >
-                    <ListItemAvatar>
-                      <Avatar>
-                        <ComputerIcon />
-                      </Avatar>
-                    </ListItemAvatar>
-                    <ListItemText 
-                      primary={peer.hostname || 'Unknown'}
-                      secondary={peer.ip}
-                      primaryTypographyProps={{
-                        className: 'text-ellipsis',
-                        title: peer.hostname || 'Unknown'
-                      }}
-                      secondaryTypographyProps={{
-                        className: 'text-ellipsis',
-                        title: peer.ip
-                      }}
-                    />
-                  </ListItemButton>
-                </ListItem>
-              ))}
-            </List>
-          ) : (
-            <Box sx={{ p: 2, textAlign: 'center' }}>
-              <Typography color="text.secondary">
-                No peers found on the network
-              </Typography>
+          <Box sx={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
+            <Box sx={{ p: 1, display: 'flex', justifyContent: 'flex-end' }}>
+              <Button 
+                variant="outlined" 
+                size="small" 
+                startIcon={<AddIcon />}
+                onClick={() => setOpenManualConnect(true)}
+              >
+                Add Peer
+              </Button>
             </Box>
-          )}
+            {peers.length > 0 ? (
+              <List sx={{ padding: 0, flexGrow: 1, overflow: 'auto' }}>
+                {peers.map((peer) => (
+                  <ListItem 
+                    key={peer.id} 
+                    disablePadding
+                    secondaryAction={null}
+                  >
+                    <ListItemButton 
+                      selected={selectedPeer && selectedPeer.id === peer.id}
+                      onClick={() => onSelectPeer(peer)}
+                    >
+                      <ListItemAvatar>
+                        <Avatar>
+                          <ComputerIcon />
+                        </Avatar>
+                      </ListItemAvatar>
+                      <ListItemText 
+                        primary={peer.hostname || 'Unknown'}
+                        secondary={peer.ip}
+                        primaryTypographyProps={{
+                          className: 'text-ellipsis',
+                          title: peer.hostname || 'Unknown'
+                        }}
+                        secondaryTypographyProps={{
+                          className: 'text-ellipsis',
+                          title: peer.ip
+                        }}
+                      />
+                    </ListItemButton>
+                  </ListItem>
+                ))}
+              </List>
+            ) : (
+              <Box sx={{ p: 2, textAlign: 'center' }}>
+                <Typography color="text.secondary">
+                  No peers found on the network
+                </Typography>
+              </Box>
+            )}
+          </Box>
+          
+          {/* Manual Peer Connection Dialog */}
+          <Dialog open={openManualConnect} onClose={() => setOpenManualConnect(false)}>
+            <DialogTitle>Connect to Peer</DialogTitle>
+            <DialogContent>
+              <DialogContentText>
+                Enter the IP address and port of the peer you want to connect to.
+              </DialogContentText>
+              <TextField
+                autoFocus
+                margin="dense"
+                id="ip"
+                label="IP Address"
+                type="text"
+                fullWidth
+                variant="outlined"
+                value={manualIp}
+                onChange={(e) => setManualIp(e.target.value)}
+                error={!!connectError}
+                helperText={connectError}
+              />
+              <TextField
+                margin="dense"
+                id="port"
+                label="Port"
+                type="text"
+                fullWidth
+                variant="outlined"
+                value={manualPort}
+                onChange={(e) => setManualPort(e.target.value)}
+              />
+            </DialogContent>
+            <DialogActions>
+              <Button onClick={() => setOpenManualConnect(false)}>Cancel</Button>
+              <Button onClick={handleManualConnect}>Connect</Button>
+            </DialogActions>
+          </Dialog>
         </TabPanel>
         
         <TabPanel value={tabValue} index={1}>
