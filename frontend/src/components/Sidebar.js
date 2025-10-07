@@ -5,7 +5,7 @@
  * the status of ongoing file transfers.
  */
 
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import Box from '@mui/material/Box';
 import Tabs from '@mui/material/Tabs';
 import Tab from '@mui/material/Tab';
@@ -27,11 +27,16 @@ import DialogActions from '@mui/material/DialogActions';
 import DialogContent from '@mui/material/DialogContent';
 import DialogContentText from '@mui/material/DialogContentText';
 import DialogTitle from '@mui/material/DialogTitle';
+import Tooltip from '@mui/material/Tooltip';
+import CircularProgress from '@mui/material/CircularProgress';
+import Chip from '@mui/material/Chip';
 import AddIcon from '@mui/icons-material/Add';
 import PersonIcon from '@mui/icons-material/Person';
 import FolderIcon from '@mui/icons-material/Folder';
 import ComputerIcon from '@mui/icons-material/Computer';
 import GroupIcon from '@mui/icons-material/Group';
+import RefreshIcon from '@mui/icons-material/Refresh';
+import WifiIcon from '@mui/icons-material/Wifi';
 
 // TabPanel component for tab content
 function TabPanel(props) {
@@ -70,6 +75,24 @@ function Sidebar({
   const [manualIp, setManualIp] = useState('');
   const [manualPort, setManualPort] = useState('8080');
   const [connectError, setConnectError] = useState('');
+  const [isDiscovering, setIsDiscovering] = useState(true);
+  const [discoveryStatus, setDiscoveryStatus] = useState('Searching for peers...');
+  
+  // Simulate peer discovery process
+  useEffect(() => {
+    setIsDiscovering(true);
+    setDiscoveryStatus('Searching for peers...');
+    
+    // After 5 seconds, update the status based on whether peers were found
+    const timer = setTimeout(() => {
+      setIsDiscovering(false);
+      setDiscoveryStatus(peers.length > 0 ? 
+        `Found ${peers.length} peer${peers.length === 1 ? '' : 's'}` : 
+        'No peers found on the network');
+    }, 5000);
+    
+    return () => clearTimeout(timer);
+  }, [peers.length]);
 
   const handleTabChange = (event, newValue) => {
     setTabValue(newValue);
@@ -82,7 +105,8 @@ function Sidebar({
     }
     
     try {
-      const response = await fetch('/api/peers/connect', {
+      // Use the correct endpoint path that matches the backend
+      const response = await fetch(`http://localhost:8080/api/peers/connect`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -90,17 +114,39 @@ function Sidebar({
         body: JSON.stringify({ ip: manualIp, port: manualPort }),
       });
       
-      const data = await response.json();
-      
-      if (data.success) {
-        setOpenManualConnect(false);
-        setManualIp('');
-        setConnectError('');
+      // Check if response is OK before trying to parse JSON
+      if (response.ok) {
+        const data = await response.json();
+        
+        if (data.success) {
+          setOpenManualConnect(false);
+          setManualIp('');
+          setConnectError('');
+        } else {
+          setConnectError(data.message || 'Failed to connect to peer');
+        }
       } else {
-        setConnectError(data.message || 'Failed to connect to peer');
+        setConnectError(`Server error: ${response.status}`);
       }
     } catch (error) {
       setConnectError('Connection error: ' + error.message);
+    }
+  };
+  
+  // Function to manually trigger peer discovery
+  const handleRefreshPeers = async () => {
+    setIsDiscovering(true);
+    setDiscoveryStatus('Searching for peers...');
+    
+    try {
+      // Trigger a new discovery scan on the backend
+      await fetch('http://localhost:8080/api/peers/discover', { method: 'POST' });
+      
+      // Discovery process will be updated via the useEffect when peers state changes
+    } catch (error) {
+      console.error('Error triggering peer discovery:', error);
+      setIsDiscovering(false);
+      setDiscoveryStatus('Error refreshing peers');
     }
   };
 
@@ -141,16 +187,42 @@ function Sidebar({
       <Box sx={{ flexGrow: 1, overflow: 'auto' }}>
         <TabPanel value={tabValue} index={0}>
           <Box sx={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
-            <Box sx={{ p: 1, display: 'flex', justifyContent: 'flex-end' }}>
-              <Button 
-                variant="outlined" 
-                size="small" 
-                startIcon={<AddIcon />}
-                onClick={() => setOpenManualConnect(true)}
-              >
-                Add Peer
-              </Button>
+            <Box sx={{ p: 1, display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+              <Tooltip title="Refresh peer list">
+                <IconButton 
+                  size="small" 
+                  onClick={handleRefreshPeers}
+                  disabled={isDiscovering}
+                >
+                  {isDiscovering ? 
+                    <CircularProgress size={20} /> : 
+                    <RefreshIcon />
+                  }
+                </IconButton>
+              </Tooltip>
+              
+              <Box sx={{ display: 'flex', alignItems: 'center' }}>
+                {isDiscovering && (
+                  <Chip 
+                    icon={<WifiIcon />} 
+                    label="Scanning..." 
+                    size="small" 
+                    color="primary" 
+                    variant="outlined"
+                    sx={{ mr: 1 }}
+                  />
+                )}
+                <Button 
+                  variant="outlined" 
+                  size="small" 
+                  startIcon={<AddIcon />}
+                  onClick={() => setOpenManualConnect(true)}
+                >
+                  Add Peer
+                </Button>
+              </Box>
             </Box>
+            
             {peers.length > 0 ? (
               <List sx={{ padding: 0, flexGrow: 1, overflow: 'auto' }}>
                 {peers.map((peer) => (
@@ -187,8 +259,19 @@ function Sidebar({
             ) : (
               <Box sx={{ p: 2, textAlign: 'center' }}>
                 <Typography color="text.secondary">
-                  No peers found on the network
+                  {discoveryStatus}
                 </Typography>
+                {!isDiscovering && (
+                  <Button 
+                    variant="text" 
+                    size="small" 
+                    startIcon={<RefreshIcon />}
+                    onClick={handleRefreshPeers}
+                    sx={{ mt: 1 }}
+                  >
+                    Refresh
+                  </Button>
+                )}
               </Box>
             )}
           </Box>

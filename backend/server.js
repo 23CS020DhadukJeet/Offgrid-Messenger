@@ -45,6 +45,24 @@ const WS_PORT = 8080;
 const HTTP_PORT = 8080; // Using same port for HTTP and WebSocket
 const UDP_PORT = 8081;
 const BROADCAST_INTERVAL = 5000; // milliseconds
+const MAX_RETRY_ATTEMPTS = 3;
+
+// Initialize connection retry mechanism
+const retryConnections = new Map(); // Store failed connection attempts
+
+// Function to add a connection to retry queue
+function addConnectionRetry(ip, port, attempts = 0) {
+  const key = `${ip}:${port}`;
+  if (!retryConnections.has(key) && attempts < MAX_RETRY_ATTEMPTS) {
+    console.log(`Adding ${key} to connection retry queue (attempt ${attempts + 1})`);
+    retryConnections.set(key, {
+      ip,
+      port,
+      attempts: attempts + 1,
+      nextRetry: Date.now() + (attempts + 1) * 5000 // Exponential backoff
+    });
+  }
+}
 
 // Get all local IP addresses
 function getAllLocalIpAddresses() {
@@ -381,47 +399,106 @@ const server = http.createServer((req, res) => {
     res.writeHead(success ? 200 : 404);
     res.end(JSON.stringify({ success }));
   } else if (pathname === '/api/peers/connect' && req.method === 'POST') {
-    // Manual peer connection endpoint
-    let body = '';
-    req.on('data', chunk => {
-      body += chunk.toString();
-    });
-    req.on('end', () => {
-      try {
-        const { ip, port } = JSON.parse(body);
-        
-        if (!ip || !port) {
-          res.writeHead(400);
-          res.end(JSON.stringify({ success: false, message: 'IP address and port are required' }));
-          return;
-        }
-        
-        // Attempt to connect to the peer
-        const peerUrl = `ws://${ip}:${port}`;
-        console.log(`Attempting manual connection to peer at ${peerUrl}`);
-        
-        // Create a new WebSocket connection to the peer
-        const ws = new WebSocket(peerUrl);
-        
-        ws.on('open', () => {
-          const peerId = `${ip}:${port}`;
-          addPeer(peerId, ws, ip);
-          
-          res.setHeader('Content-Type', 'application/json');
-          res.writeHead(200);
-          res.end(JSON.stringify({ success: true, message: 'Connected to peer successfully' }));
-        });
-        
-        ws.on('error', (error) => {
-          console.error(`Failed to connect to peer at ${peerUrl}:`, error.message);
-          res.writeHead(500);
-          res.end(JSON.stringify({ success: false, message: 'Failed to connect to peer' }));
-        });
-      } catch (error) {
-        res.writeHead(400);
-        res.end(JSON.stringify({ success: false, message: 'Invalid request' }));
-      }
-    });
+     // Manual peer connection endpoint
+     let body = '';
+     req.on('data', chunk => {
+       body += chunk.toString();
+     });
+     req.on('end', () => {
+       try {
+         const { ip, port } = JSON.parse(body);
+         
+         if (!ip || !port) {
+           res.writeHead(400, { 'Content-Type': 'application/json' });
+           res.end(JSON.stringify({ success: false, message: 'IP address and port are required' }));
+           return;
+         }
+         
+         // Attempt to connect to the peer
+         const peerUrl = `ws://${ip}:${port}`;
+         console.log(`Attempting manual connection to peer at ${peerUrl}`);
+         
+         // Set response headers first
+         res.setHeader('Content-Type', 'application/json');
+         
+         // Create a new WebSocket connection to the peer
+         try {
+           const ws = new WebSocket(peerUrl);
+           
+           // Set a timeout for connection
+           const connectionTimeout = setTimeout(() => {
+             if (ws.readyState !== WebSocket.OPEN) {
+               ws.terminate();
+               res.writeHead(500);
+               res.end(JSON.stringify({ success: false, message: 'Connection timeout' }));
+             }
+           }, 5000);
+           
+           ws.on('open', () => {
+             clearTimeout(connectionTimeout);
+             const peerId = `${ip}:${port}`;
+             addPeer(peerId, ws, ip);
+             
+             res.writeHead(200);
+             res.end(JSON.stringify({ success: true, message: 'Connected to peer successfully' }));
+           });
+           
+           ws.on('error', (error) => {
+             clearTimeout(connectionTimeout);
+             console.error(`Failed to connect to peer at ${peerUrl}:`, error.message);
+             res.writeHead(500);
+             res.end(JSON.stringify({ success: false, message: 'Failed to connect to peer: ' + error.message }));
+             // Add to retry queue for later connection attempts
+             addConnectionRetry(ip, port);
+           });
+         } catch (wsError) {
+           console.error('WebSocket creation error:', wsError);
+           res.writeHead(500);
+           res.end(JSON.stringify({ success: false, message: 'Failed to create WebSocket connection: ' + wsError.message }));
+           // Add to retry queue for later connection attempts
+           addConnectionRetry(ip, port);
+         }
+       } catch (error) {
+         console.error('Request parsing error:', error);
+         res.writeHead(400, { 'Content-Type': 'application/json' });
+         res.end(JSON.stringify({ success: false, message: 'Invalid request: ' + error.message }));
+       }
+     });
+  } else if (pathname === '/api/peers/discover' && req.method === 'POST') {
+     // Manual peer discovery endpoint
+     console.log('Manual peer discovery triggered');
+     
+     // Send discovery messages to all network interfaces
+     const discoveryMessage = {
+       type: 'discovery',
+       ip: localIp,
+       port: WS_PORT,
+       hostname: hostname
+     };
+     
+     const messageBuffer = Buffer.from(JSON.stringify(discoveryMessage));
+     
+     // Broadcast to all network interfaces
+     for (const iface of localIpAddresses) {
+       try {
+         // Calculate subnet broadcast address for this interface
+         const subnetBroadcast = getSubnetBroadcast(iface.address, iface.netmask);
+         console.log(`Broadcasting to subnet ${subnetBroadcast} on interface ${iface.name}`);
+         
+         // Send to subnet broadcast address
+         udpSocket.send(messageBuffer, 0, messageBuffer.length, UDP_PORT, subnetBroadcast);
+       } catch (error) {
+         console.error(`Error broadcasting on interface ${iface.name}:`, error);
+       }
+     }
+     
+     // Also try direct broadcast as fallback
+     udpSocket.send(messageBuffer, 0, messageBuffer.length, UDP_PORT, '255.255.255.255');
+     
+     res.setHeader('Content-Type', 'application/json');
+     res.writeHead(200);
+     res.end(JSON.stringify({ success: true, message: 'Peer discovery initiated' }));
+
   } else if (pathname === '/api/bulletins/user' && req.method === 'GET') {
     // Get all announcements visible to a user
     const userId = parsedUrl.query.userId;
@@ -902,7 +979,7 @@ udpSocket.on('message', (msg, rinfo) => {
     
     if (message.type === 'discovery') {
       // Don't respond to our own discovery messages
-      if (rinfo.address === localIp) {
+      if (rinfo.address === localIp || (message.hostname && message.hostname === hostname)) {
         return;
       }
       
@@ -918,11 +995,58 @@ udpSocket.on('message', (msg, rinfo) => {
       
       const responseBuffer = Buffer.from(JSON.stringify(response));
       udpSocket.send(responseBuffer, 0, responseBuffer.length, rinfo.port, rinfo.address);
+      
+      // Try to connect to the peer via WebSocket
+      connectToPeer(rinfo.address, message.port || WS_PORT);
+    } else if (message.type === 'discovery_response') {
+      console.log(`Discovery response from ${message.hostname || rinfo.address}:${message.port}`);
+      connectToPeer(rinfo.address, message.port || WS_PORT);
     }
   } catch (error) {
     console.error('Error processing UDP message:', error);
   }
 });
+
+// Function to connect to a peer via WebSocket
+function connectToPeer(ip, port) {
+  // Check if we're already connected to this peer
+  const peerId = `${ip}:${port}`;
+  const existingPeer = getPeers().find(p => p.id === peerId);
+  if (existingPeer) {
+    console.log(`Already connected to peer at ${ip}:${port}`);
+    return;
+  }
+  
+  console.log(`Connecting to peer at ${ip}:${port}`);
+  
+  try {
+    const ws = new WebSocket(`ws://${ip}:${port}`);
+    
+    ws.on('open', () => {
+      console.log(`Connected to peer at ${ip}:${port}`);
+      addPeer(peerId, ws, ip);
+      
+      // Remove from retry queue if it was there
+      if (retryConnections && retryConnections.has(peerId)) {
+        retryConnections.delete(peerId);
+      }
+    });
+    
+    ws.on('error', (error) => {
+      console.error(`Failed to connect to peer at ${ip}:${port}:`, error.message);
+      // Add to retry queue
+      if (retryConnections) {
+        addConnectionRetry(ip, port);
+      }
+    });
+  } catch (error) {
+    console.error(`Error creating WebSocket connection to ${ip}:${port}:`, error.message);
+    // Add to retry queue
+    if (retryConnections) {
+      addConnectionRetry(ip, port);
+    }
+  }
+}
 
 // Bind UDP socket
 udpSocket.bind(UDP_PORT, () => {
@@ -943,32 +1067,65 @@ udpSocket.bind(UDP_PORT, () => {
     const messageBuffer = Buffer.from(JSON.stringify(discoveryMessage));
     
     // Broadcast to all network interfaces
-    for (const iface of localIpAddresses) {
-      try {
-        // Calculate subnet broadcast address for this interface
-        const subnetBroadcast = getSubnetBroadcast(iface.address, iface.netmask);
-        console.log(`Broadcasting to subnet ${subnetBroadcast} on interface ${iface.name}`);
-        
-        // Send to subnet broadcast address
-        udpSocket.send(messageBuffer, 0, messageBuffer.length, UDP_PORT, subnetBroadcast);
-        
-        // Also try direct broadcast as fallback
-        udpSocket.send(messageBuffer, 0, messageBuffer.length, UDP_PORT, '255.255.255.255');
-      } catch (error) {
-        console.error(`Error broadcasting on interface ${iface.name}:`, error);
-      }
-    }
-    
-    // Additional discovery method: Try to reach common gateway addresses
-    const gatewayAddresses = ['192.168.0.1', '192.168.1.1', '192.168.43.1', '10.0.0.1', '10.0.0.138'];
-    for (const gateway of gatewayAddresses) {
-      try {
-        udpSocket.send(messageBuffer, 0, messageBuffer.length, UDP_PORT, gateway);
-      } catch (error) {
-        // Silently ignore errors for gateway addresses
-      }
-    }
+     for (const iface of localIpAddresses) {
+       try {
+         // Calculate subnet broadcast address for this interface
+         const subnetBroadcast = getSubnetBroadcast(iface.address, iface.netmask);
+         console.log(`Broadcasting to subnet ${subnetBroadcast} on interface ${iface.name}`);
+         
+         // Send to subnet broadcast address
+         udpSocket.send(messageBuffer, 0, messageBuffer.length, UDP_PORT, subnetBroadcast);
+         
+         // Also try direct broadcast as fallback
+         udpSocket.send(messageBuffer, 0, messageBuffer.length, UDP_PORT, '255.255.255.255');
+       } catch (error) {
+         console.error(`Error broadcasting on interface ${iface.name}:`, error);
+       }
+     }
+     
+     // Additional discovery method: Try to reach common gateway addresses
+     const gatewayAddresses = ['192.168.0.1', '192.168.1.1', '192.168.43.1', '10.0.0.1', '10.0.0.138'];
+     for (const gateway of gatewayAddresses) {
+       try {
+         udpSocket.send(messageBuffer, 0, messageBuffer.length, UDP_PORT, gateway);
+       } catch (error) {
+         // Silently ignore errors for gateway addresses
+       }
+     }
+     
+     // Scan common IP ranges in LAN for direct peer discovery
+     // This helps in environments where broadcast packets are blocked
+     const ipBase = localIp.split('.').slice(0, 3).join('.');
+     for (let i = 1; i < 255; i++) {
+       if (i % 10 === 0) { // Only scan every 10th IP to reduce traffic
+         const targetIp = `${ipBase}.${i}`;
+         // Don't scan our own IP
+         if (targetIp !== localIp) {
+           try {
+             udpSocket.send(messageBuffer, 0, messageBuffer.length, UDP_PORT, targetIp);
+           } catch (error) {
+             // Silently ignore errors for direct IP scanning
+           }
+         }
+       }
+     }
   }, BROADCAST_INTERVAL);
+  
+  // Process connection retry queue every 10 seconds
+  setInterval(() => {
+    const now = Date.now();
+    for (const [key, data] of retryConnections.entries()) {
+      if (now >= data.nextRetry) {
+        console.log(`Retrying connection to ${key} (attempt ${data.attempts})`); 
+        
+        // Remove from retry queue
+        retryConnections.delete(key);
+        
+        // Attempt to connect
+        connectToPeer(data.ip, data.port);
+      }
+    }
+  }, 10000);
 });
 
 // Export server for potential use in other modules
