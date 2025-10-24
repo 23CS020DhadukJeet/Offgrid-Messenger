@@ -164,9 +164,52 @@ function updateUser(userId, updates) {
 // Initialize the users database on module load
 initUsersDb();
 
+// Get user settings
+function getUserSettings() {
+  try {
+    const settingsPath = path.join(__dirname, 'settings.json');
+    if (!fs.existsSync(settingsPath)) {
+      // Create default settings if file doesn't exist
+      const defaultSettings = {
+        accessCode: 'offgrid2023',
+        theme: 'light'
+      };
+      fs.writeFileSync(settingsPath, JSON.stringify(defaultSettings, null, 2), 'utf8');
+      return defaultSettings;
+    }
+    
+    const settingsData = fs.readFileSync(settingsPath, 'utf8');
+    return JSON.parse(settingsData);
+  } catch (error) {
+    console.error('Error loading settings:', error);
+    // Return default settings in case of error
+    return {
+      accessCode: 'offgrid2023',
+      theme: 'light'
+    };
+  }
+}
+
+// Update user settings
+function updateUserSettings(settings) {
+  try {
+    const settingsPath = path.join(__dirname, 'settings.json');
+    const currentSettings = getUserSettings();
+    const updatedSettings = { ...currentSettings, ...settings };
+    
+    fs.writeFileSync(settingsPath, JSON.stringify(updatedSettings, null, 2), 'utf8');
+    return { success: true, settings: updatedSettings };
+  } catch (error) {
+    console.error('Error updating settings:', error);
+    return { success: false, message: 'Failed to update settings' };
+  }
+}
+
 module.exports = {
   registerUser,
   loginUser,
   getUserById,
-  updateUser
+  updateUser,
+  getUserSettings,
+  updateUserSettings
 };

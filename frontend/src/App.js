@@ -16,6 +16,9 @@ import DialogTitle from '@mui/material/DialogTitle';
 import DialogContent from '@mui/material/DialogContent';
 import IconButton from '@mui/material/IconButton';
 import CloseIcon from '@mui/icons-material/Close';
+import Typography from '@mui/material/Typography';
+import TextField from '@mui/material/TextField';
+import Button from '@mui/material/Button';
 
 // Import NotificationManager
 import NotificationManager from './components/NotificationManager';
@@ -32,6 +35,8 @@ import Settings from './components/Settings';
 import Login from './components/Login';
 import BulletinBoard from './components/BulletinBoard';
 import BulletinNotification from './components/BulletinNotification';
+import CallInterface from './components/CallInterface';
+import CallNotification from './components/CallNotification';
 
 // Import auth service
 import { isLoggedIn, getCurrentUser, logoutUser } from './services/authService';
@@ -62,6 +67,21 @@ import {
   handleGroupFileComplete,
   getActiveGroupTransfers 
 } from './services/groupFileService';
+
+// Import call service
+import {
+  initializeCallService,
+  initiateCall,
+  initiateGroupCall,
+  acceptCall,
+  rejectCall,
+  endCall,
+  getLocalStream,
+  handleCallMessage,
+  isCallActive,
+  toggleAudioMute,
+  toggleVideo
+} from './services/callService';
 
 // Import file transfer history service
 import { 
@@ -125,19 +145,80 @@ function App() {
   // State for username
   const [username, setUsername] = useState(user ? user.username : 'User');
   
+  // State for call management
+  const [activeCall, setActiveCall] = useState(null);
+  const [incomingCall, setIncomingCall] = useState(null);
+  const [localStream, setLocalStream] = useState(null);
+  const [remoteStreams, setRemoteStreams] = useState([]);
+  
   // Create theme based on mode
   const theme = useMemo(() => createTheme({
     palette: {
       mode: darkMode ? 'dark' : 'light',
       primary: {
-        main: '#1976d2',
+        main: '#3f51b5',
       },
       secondary: {
-        main: '#dc004e',
+        main: '#f50057',
       },
       background: {
         default: darkMode ? '#303030' : '#f5f5f5',
         paper: darkMode ? '#424242' : '#ffffff',
+      },
+      success: {
+        main: '#4caf50',
+      },
+      error: {
+        main: '#f44336',
+      },
+    },
+    shape: {
+      borderRadius: 12,
+    },
+    typography: {
+      fontFamily: '"Roboto", "Helvetica", "Arial", sans-serif',
+      h6: {
+        fontWeight: 600,
+      },
+    },
+    components: {
+      MuiButton: {
+        styleOverrides: {
+          root: {
+            borderRadius: 8,
+            textTransform: 'none',
+            fontWeight: 500,
+          },
+        },
+      },
+      MuiCard: {
+        styleOverrides: {
+          root: {
+            borderRadius: 12,
+            boxShadow: '0 4px 12px 0 rgba(0,0,0,0.05)',
+          },
+        },
+      },
+      MuiListItem: {
+        styleOverrides: {
+          root: {
+            borderRadius: 8,
+            marginBottom: 4,
+          },
+        },
+      },
+      MuiListItemButton: {
+        styleOverrides: {
+          root: {
+            borderRadius: 8,
+            '&.Mui-selected': {
+              backgroundColor: darkMode ? 'rgba(63, 81, 181, 0.16)' : 'rgba(63, 81, 181, 0.08)',
+              '&:hover': {
+                backgroundColor: darkMode ? 'rgba(63, 81, 181, 0.24)' : 'rgba(63, 81, 181, 0.12)',
+              },
+            },
+          },
+        },
       },
     },
   }), [darkMode]);
@@ -158,6 +239,23 @@ function App() {
     }
   }, [isAuthenticated, user, groups]);
   
+  // Initialize call service
+  useEffect(() => {
+    if (isAuthenticated && user) {
+      initializeCallService({
+        username: user.username,
+        onLocalStream: (stream) => setLocalStream(stream),
+        onRemoteStream: (stream, participantId) => {
+          setRemoteStreams(prev => [...prev, { stream, participantId }]);
+        },
+        onCallEnded: () => {
+          setActiveCall(null);
+          setRemoteStreams([]);
+        }
+      });
+    }
+  }, [isAuthenticated, user]);
+
   // Initialize WebSocket connection and peer discovery
   useEffect(() => {
     const handleOpen = () => {
@@ -183,16 +281,28 @@ function App() {
         
         switch (data.type) {
           case 'peer_list':
-            setPeers(data.peers);
+            // Update peers with authorized status
+            setPeers(data.peers.map(peer => ({
+              ...peer,
+              authorized: peer.authorized !== undefined ? peer.authorized : true // Default to true for backward compatibility
+            })));
             break;
             
           case 'peer_joined':
             setPeers(prevPeers => {
               // Check if peer already exists
               if (prevPeers.some(p => p.id === data.peer.id)) {
-                return prevPeers;
+                // Update existing peer if authorization status changed
+                return prevPeers.map(p => 
+                  p.id === data.peer.id 
+                    ? { ...p, authorized: data.peer.authorized !== undefined ? data.peer.authorized : p.authorized } 
+                    : p
+                );
               }
-              return [...prevPeers, data.peer];
+              return [...prevPeers, {
+                ...data.peer,
+                authorized: data.peer.authorized !== undefined ? data.peer.authorized : true // Default to true for backward compatibility
+              }];
             });
             showNotification(`${data.peer.hostname || data.peer.id} joined`, 'info');
             break;
@@ -203,6 +313,22 @@ function App() {
               setSelectedPeer(null);
             }
             showNotification(`A peer has left the network`, 'info');
+            break;
+            
+          case 'peer_auth_status':
+            // Update peer authorization status
+            setPeers(prevPeers => prevPeers.map(p => 
+              p.id === data.peerId 
+                ? { ...p, authorized: data.authorized } 
+                : p
+            ));
+            
+            // Show notification
+            if (data.authorized) {
+              showNotification(`${data.hostname || 'A peer'} is now authorized`, 'success');
+            } else {
+              showNotification(`${data.hostname || 'A peer'} is unauthorized`, 'warning');
+            }
             break;
             
           case 'chat':
@@ -247,6 +373,32 @@ function App() {
             
           case 'GROUP_ANNOUNCEMENT':
             handleGroupAnnouncement(data);
+            break;
+            
+          // Call-related message types
+          case 'call_request':
+            handleIncomingCallRequest(data);
+            break;
+            
+          case 'call_accepted':
+            handleCallAcceptedMessage(data);
+            break;
+            
+          case 'call_rejected':
+            handleCallRejectedMessage(data);
+            break;
+            
+          case 'call_ended':
+            handleCallEndedMessage(data);
+            break;
+            
+          case 'ice_candidate':
+            handleIceCandidateMessage(data);
+            break;
+            
+          case 'sdp_offer':
+          case 'sdp_answer':
+            handleSdpMessage(data);
             break;
             
           default:
@@ -481,6 +633,67 @@ function App() {
         body: announcement.title
       });
     }
+  };
+  
+  // Call-related handlers
+  const handleIncomingCallRequest = (data) => {
+    setIncomingCall(data);
+    
+    // Show notification
+    const callerName = data.isGroupCall ? `Group: ${data.groupId}` : data.callerId;
+    showNotification(`Incoming call from ${callerName}`, 'info');
+  };
+  
+  const handleCallAcceptedMessage = (data) => {
+    // Handle call accepted
+    setActiveCall(data);
+    setIncomingCall(null);
+    showNotification('Call connected', 'success');
+  };
+  
+  const handleCallRejectedMessage = (data) => {
+    // Handle call rejected
+    setActiveCall(null);
+    showNotification('Call rejected', 'info');
+  };
+  
+  const handleCallEndedMessage = (data) => {
+    // Handle call ended
+    setActiveCall(null);
+    setRemoteStreams([]);
+    showNotification('Call ended', 'info');
+  };
+  
+  const handleIceCandidateMessage = (data) => {
+    // Handle ICE candidate through handleCallMessage
+    handleCallMessage(data);
+  };
+  
+  const handleSdpMessage = (data) => {
+    // Handle SDP exchange through handleCallMessage
+    handleCallMessage(data);
+  };
+  
+  // Call action handlers
+  const startCall = (peerId) => {
+    const callData = initiateCall(peerId);
+    setActiveCall(callData);
+  };
+  
+  const startGroupCall = (groupId) => {
+    const callData = initiateGroupCall(groupId);
+    setActiveCall(callData);
+  };
+  
+  const handleAcceptIncomingCall = () => {
+    acceptCall(incomingCall);
+    setActiveCall(incomingCall);
+    setIncomingCall(null);
+  };
+  
+  const handleRejectIncomingCall = () => {
+    rejectCall(incomingCall);
+    setIncomingCall(null);
   };
   
   // Handle group file transfer requests
@@ -831,12 +1044,70 @@ function App() {
     setNotification(prev => ({ ...prev, open: false }));
   };
   
+  // State for access code verification dialog
+  const [accessCodeDialog, setAccessCodeDialog] = useState({
+    open: false,
+    peerId: null,
+    peerName: '',
+    accessCode: '',
+    error: ''
+  });
+
   // Handle login success
   const handleLoginSuccess = (userData) => {
     setUser(userData);
     setIsAuthenticated(true);
     setUsername(userData.username);
     showNotification(`Welcome, ${userData.username}!`, 'success');
+  };
+  
+  // Handle peer selection
+  const handlePeerSelect = (peer) => {
+    // If peer is unauthorized, show access code dialog
+    if (peer && !peer.authorized) {
+      setAccessCodeDialog({
+        open: true,
+        peerId: peer.id,
+        peerName: peer.hostname || 'Unknown peer',
+        accessCode: '',
+        error: ''
+      });
+      return;
+    }
+    
+    setSelectedPeer(peer);
+    setSelectedGroup(null);
+  };
+  
+  // Handle access code verification
+  const handleVerifyAccessCode = () => {
+    if (!accessCodeDialog.accessCode) {
+      setAccessCodeDialog(prev => ({...prev, error: 'Access code is required'}));
+      return;
+    }
+    
+    // Send access code verification message
+    sendMessage({
+      type: 'verify_access_code',
+      peerId: accessCodeDialog.peerId,
+      accessCode: accessCodeDialog.accessCode
+    });
+    
+    // Close dialog and reset
+    setAccessCodeDialog({
+      open: false,
+      peerId: null,
+      peerName: '',
+      accessCode: '',
+      error: ''
+    });
+    
+    // Show notification
+    setNotification({
+      open: true,
+      message: 'Verifying access code...',
+      severity: 'info'
+    });
   };
   
   // Handle logout
@@ -866,6 +1137,8 @@ function App() {
             onOpenBulletinBoard={() => setBulletinBoardOpen(true)}
             user={user}
             onLogout={handleLogout}
+            onVoiceCall={() => selectedPeer && startCall(selectedPeer.id)}
+            onVideoCall={() => selectedPeer && startCall(selectedPeer.id, true)}
           />
           
           <Box sx={{ display: 'flex', flexGrow: 1, overflow: 'hidden' }}>
@@ -878,6 +1151,8 @@ function App() {
               selectedGroup={selectedGroup}
               onSelectGroup={handleGroupSelect}
               onManageGroups={handleManageGroups}
+              onCallPeer={startCall}
+              onCallGroup={startGroupCall}
             />
             
             {selectedGroup ? (
@@ -930,6 +1205,61 @@ function App() {
             notifications={notifications} 
             onDismiss={dismissNotification} 
           />
+          
+          {/* Access Code Verification Dialog */}
+          <Dialog open={accessCodeDialog.open} onClose={() => setAccessCodeDialog(prev => ({ ...prev, open: false }))}>
+            <DialogTitle>
+              Unauthorized Peer
+              <IconButton
+                aria-label="close"
+                onClick={() => setAccessCodeDialog(prev => ({ ...prev, open: false }))}
+                sx={{
+                  position: 'absolute',
+                  right: 8,
+                  top: 8,
+                }}
+              >
+                <CloseIcon />
+              </IconButton>
+            </DialogTitle>
+            <DialogContent>
+              <Box sx={{ p: 2 }}>
+                <Typography variant="body1" gutterBottom>
+                  {accessCodeDialog.peerName} is not authorized to communicate with you.
+                </Typography>
+                <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
+                  To authorize this peer, enter your access code below:
+                </Typography>
+                <TextField
+                  autoFocus
+                  margin="dense"
+                  label="Access Code"
+                  type="password"
+                  fullWidth
+                  variant="outlined"
+                  value={accessCodeDialog.accessCode}
+                  onChange={(e) => setAccessCodeDialog(prev => ({ ...prev, accessCode: e.target.value }))}
+                  error={!!accessCodeDialog.error}
+                  helperText={accessCodeDialog.error}
+                  sx={{ mb: 2 }}
+                />
+                <Box sx={{ display: 'flex', justifyContent: 'flex-end', mt: 2 }}>
+                  <Button 
+                    onClick={() => setAccessCodeDialog(prev => ({ ...prev, open: false }))}
+                    sx={{ mr: 1 }}
+                  >
+                    Cancel
+                  </Button>
+                  <Button 
+                    variant="contained" 
+                    onClick={handleVerifyAccessCode}
+                  >
+                    Verify
+                  </Button>
+                </Box>
+              </Box>
+            </DialogContent>
+          </Dialog>
           
           {/* Bulletin Board Notifications */}
           <Box 
@@ -1009,6 +1339,24 @@ function App() {
               </DialogContent>
             </Dialog>
           )}
+        
+          {/* Call interface */}
+          {activeCall && (
+            <CallInterface
+              call={activeCall}
+              localStream={localStream}
+              remoteStreams={remoteStreams}
+              onClose={() => setActiveCall(null)}
+            />
+          )}
+          
+          {/* Incoming call notification */}
+          <CallNotification
+            open={incomingCall !== null}
+            callData={incomingCall}
+            onAccept={handleAcceptIncomingCall}
+            onReject={handleRejectIncomingCall}
+          />
         </Box>
       )}
     </ThemeProvider>

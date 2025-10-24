@@ -72,6 +72,10 @@ function ChatArea({ messages, selectedPeer, onSendMessage, onSendFile }) {
       flexDirection: 'column', 
       height: '100%',
       flexGrow: 1,
+      bgcolor: 'background.default',
+      borderRadius: 2,
+      overflow: 'hidden',
+      boxShadow: '0 4px 12px 0 rgba(0,0,0,0.05)'
     }}>
       {/* Messages area */}
       <Box sx={{ 
@@ -120,8 +124,15 @@ function ChatArea({ messages, selectedPeer, onSendMessage, onSendFile }) {
       <Divider />
       
       {/* Message input area - always visible but disabled when no peer is selected */}
-      <Box sx={{ p: 2, backgroundColor: 'background.paper' }}>
-        <form onSubmit={handleSendMessage}>
+      <Box sx={{ 
+        p: 2, 
+        borderTop: 1, 
+        borderColor: 'divider',
+        display: 'flex',
+        alignItems: 'center',
+        bgcolor: 'background.paper'
+      }}>
+        <form onSubmit={handleSendMessage} style={{ width: '100%' }}>
           <Box sx={{ display: 'flex', alignItems: 'center' }}>
             <TextField
               fullWidth
@@ -131,7 +142,16 @@ function ChatArea({ messages, selectedPeer, onSendMessage, onSendFile }) {
               value={messageText}
               onChange={(e) => setMessageText(e.target.value)}
               onKeyPress={(e) => e.key === 'Enter' && !e.shiftKey && handleSendMessage(e)}
-              sx={{ mr: 1 }}
+              sx={{ 
+                mr: 1,
+                '& .MuiOutlinedInput-root': {
+                  borderRadius: 4,
+                  '&.Mui-focused .MuiOutlinedInput-notchedOutline': {
+                    borderColor: 'primary.main',
+                    borderWidth: 2
+                  }
+                }
+              }}
               disabled={!selectedPeer}
             />
             
@@ -148,6 +168,7 @@ function ChatArea({ messages, selectedPeer, onSendMessage, onSendFile }) {
                   onClick={handleFileSelect} 
                   color="primary"
                   disabled={!selectedPeer}
+                  sx={{ color: 'action.active' }}
                 >
                   <AttachFileIcon />
                 </IconButton>
@@ -160,6 +181,12 @@ function ChatArea({ messages, selectedPeer, onSendMessage, onSendFile }) {
                   type="submit" 
                   color="primary" 
                   disabled={!messageText.trim() || !selectedPeer}
+                  sx={{ 
+                    '&:hover': {
+                      transform: 'translateY(-2px)',
+                      transition: 'transform 0.2s'
+                    }
+                  }}
                 >
                   <SendIcon />
                 </IconButton>

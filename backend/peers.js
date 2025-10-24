@@ -11,12 +11,16 @@ const { encryptMessage } = require('./encryption');
 // Store connected peers
 let peers = [];
 
+// Store discovered peers (including unauthorized ones)
+let discoveredPeers = [];
+
 /**
  * Add a new peer to the peer list
  * @param {string} id - Unique identifier for the peer (usually IP:PORT)
  * @param {WebSocket} socket - WebSocket connection to the peer
  * @param {string} ip - IP address of the peer
  * @param {string} hostname - Hostname of the peer (optional)
+ * @param {boolean} authorized - Whether the peer is authorized (has correct access code)
  */
 function addPeer(id, socket, ip, hostname = null) {
   // Check if peer already exists
@@ -181,6 +185,103 @@ function cleanupDeadPeers() {
 // Run cleanup every minute
 setInterval(cleanupDeadPeers, 60000);
 
+/**
+ * Add a peer to the discovery list
+ * @param {Object} peer - Peer object with id, ip, port, hostname, lastSeen, and authorized status
+ */
+function addPeerToDiscoveryList(peer) {
+  const existingIndex = discoveredPeers.findIndex(p => p.id === peer.id);
+  
+  if (existingIndex !== -1) {
+    // Update existing peer
+    discoveredPeers[existingIndex] = {
+      ...discoveredPeers[existingIndex],
+      ...peer,
+      lastSeen: Date.now()
+    };
+  } else {
+    // Add new peer
+    discoveredPeers.push({
+      ...peer,
+      lastSeen: Date.now()
+    });
+  }
+  
+  // Broadcast updated peer list to all connected clients
+  broadcastPeerListUpdate();
+}
+
+/**
+ * Update a peer's last seen timestamp
+ * @param {string} peerId - ID of the peer to update
+ */
+function updatePeerLastSeen(peerId) {
+  const peerIndex = discoveredPeers.findIndex(p => p.id === peerId);
+  
+  if (peerIndex !== -1) {
+    discoveredPeers[peerIndex].lastSeen = Date.now();
+  }
+}
+
+/**
+ * Update a peer's authorization status
+ * @param {string} peerId - ID of the peer to update
+ * @param {boolean} authorized - Whether the peer is authorized
+ */
+function updatePeerAuthStatus(peerId, authorized) {
+  const peerIndex = discoveredPeers.findIndex(p => p.id === peerId);
+  
+  if (peerIndex !== -1) {
+    discoveredPeers[peerIndex].authorized = authorized;
+    // Broadcast updated peer list to all connected clients
+    broadcastPeerListUpdate();
+  }
+}
+
+/**
+ * Get all discovered peers (including unauthorized ones)
+ * @returns {Array} - Array of discovered peer objects
+ */
+function getDiscoveredPeers() {
+  return discoveredPeers;
+}
+
+/**
+ * Remove inactive peers from the discovery list
+ * @param {number} timeout - Time in milliseconds after which a peer is considered inactive
+ */
+function removeInactivePeers(timeout) {
+  const now = Date.now();
+  const initialCount = discoveredPeers.length;
+  
+  discoveredPeers = discoveredPeers.filter(peer => (now - peer.lastSeen) < timeout);
+  
+  if (discoveredPeers.length < initialCount) {
+    console.log(`Removed ${initialCount - discoveredPeers.length} inactive peers`);
+    // Broadcast updated peer list to all connected clients
+    broadcastPeerListUpdate();
+  }
+}
+
+/**
+ * Broadcast the updated peer list to all connected clients
+ */
+function broadcastPeerListUpdate() {
+  const peerListMessage = {
+    type: 'peer_list',
+    peers: discoveredPeers.map(peer => ({
+      id: peer.id,
+      ip: peer.ip,
+      hostname: peer.hostname || 'Unknown',
+      authorized: peer.authorized,
+      capabilities: peer.capabilities || [],
+      version: peer.version || '1.0.0'
+    }))
+  };
+  
+  broadcastToPeers(JSON.stringify(peerListMessage));
+}
+
 module.exports = {
   addPeer,
   removePeer,
@@ -188,5 +289,10 @@ module.exports = {
   getPeerById,
   broadcastToPeers,
   sendToPeer,
-  connectToPeer
+  connectToPeer,
+  addPeerToDiscoveryList,
+  updatePeerLastSeen,
+  updatePeerAuthStatus,
+  getDiscoveredPeers,
+  removeInactivePeers
 };

@@ -11,9 +11,9 @@ const os = require('os');
 const http = require('http');
 const url = require('url');
 const { encryptMessage, decryptMessage } = require('./encryption');
-const { addPeer, removePeer, getPeers, broadcastToPeers } = require('./peers');
+const { addPeer, removePeer, getPeers, broadcastToPeers, addPeerToDiscoveryList, updatePeerLastSeen, updatePeerAuthStatus, getDiscoveredPeers, removeInactivePeers } = require('./peers');
 const { handleFileTransferRequest } = require('./fileTransfer');
-const { registerUser, loginUser, getUserById, updateUser } = require('./userAuth');
+const { registerUser, loginUser, getUserById, updateUser, getUserSettings, updateUserSettings } = require('./userAuth');
 const { 
   createGroup, 
   getGroup, 
@@ -39,12 +39,29 @@ const {
   deleteAnnouncement,
   getUserVisibleAnnouncements
 } = require('./bulletinBoard');
+const {
+  initiateCall,
+  acceptCall,
+  rejectCall,
+  endCall,
+  handleIceCandidate,
+  handleSdpExchange,
+  initiateGroupCall,
+  joinGroupCall,
+  leaveGroupCall,
+  endGroupCall,
+  handleGroupIceCandidate,
+  handleGroupSdpExchange,
+  getUserActiveCalls,
+  getGroupActiveCalls
+} = require('./callManager');
 
 // Configuration
 const WS_PORT = 8080;
 const HTTP_PORT = 8080; // Using same port for HTTP and WebSocket
-const UDP_PORT = 8081;
-const BROADCAST_INTERVAL = 5000; // milliseconds
+const UDP_PORT = 2425; // Changed to 2425 as per requirements
+const BROADCAST_INTERVAL = 30000; // Changed to 30 seconds as per requirements
+const PEER_TIMEOUT = 90000; // 90 seconds (3 missed beacons)
 const MAX_RETRY_ATTEMPTS = 3;
 
 // Initialize connection retry mechanism
@@ -659,13 +676,35 @@ wss.on('connection', (ws, req) => {
   const peerId = `${clientIp}:${WS_PORT}`;
   addPeer(peerId, ws, clientIp);
   
+  // Initially mark as unauthorized in discovery list
+  const discoveredPeer = getDiscoveredPeers().find(p => p.id === peerId);
+  if (discoveredPeer) {
+    // Keep the peer in discovered list but mark as unauthorized initially
+    updatePeerAuthStatus(peerId, false);
+  } else {
+    // Add to discovery list as unauthorized
+    addPeerToDiscoveryList({
+      id: peerId,
+      ip: clientIp,
+      port: WS_PORT,
+      hostname: hostname || 'Unknown',
+      lastSeen: Date.now(),
+      capabilities: ['chat', 'file', 'call', 'clipboard'],
+      version: '1.0.0',
+      authorized: false
+    });
+  }
+  
   // Send the current peer list to the new peer
   const peerListMessage = {
     type: 'peer_list',
-    peers: getPeers().map(peer => ({
+    peers: getDiscoveredPeers().map(peer => ({
       id: peer.id,
       ip: peer.ip,
-      hostname: peer.hostname || 'Unknown'
+      hostname: peer.hostname || 'Unknown',
+      authorized: peer.authorized,
+      capabilities: peer.capabilities || [],
+      version: peer.version || '1.0.0'
     }))
   };
   
@@ -688,6 +727,28 @@ wss.on('connection', (ws, req) => {
     try {
       const decryptedMessage = decryptMessage(message.toString());
       const parsedMessage = JSON.parse(decryptedMessage);
+      
+      // Handle access code verification
+      if (parsedMessage.type === 'verify_access_code') {
+        const userSettings = getUserSettings();
+        const correctAccessCode = userSettings.accessCode || '';
+        
+        // Check if the provided access code is correct
+        const isAuthorized = parsedMessage.accessCode === correctAccessCode;
+        
+        // Update peer's authorization status
+        updatePeerAuthStatus(peerId, isAuthorized);
+        
+        // Send response
+        const response = {
+          type: 'access_code_verification',
+          success: isAuthorized,
+          message: isAuthorized ? 'Access code verified successfully' : 'Invalid access code'
+        };
+        
+        ws.send(encryptMessage(JSON.stringify(response)));
+        return;
+      }
       
       switch (parsedMessage.type) {
         case 'chat':
@@ -782,6 +843,224 @@ wss.on('connection', (ws, req) => {
           
           // Verify user is member of group
           if (!isGroupMember(parsedMessage.groupId, peerId)) {
+            // Send error message
+            console.log(`User ${peerId} is not a member of group ${parsedMessage.groupId}`);
+            break;
+          }
+          
+        case 'call_initiate': {
+          // Voice/Video Call Handling
+          // Handle call initiation
+          console.log(`Call initiation from ${peerId} to ${parsedMessage.calleeId}`);
+          const callId = initiateCall(peerId, parsedMessage.calleeId, parsedMessage.withVideo);
+          
+          // Notify the callee
+          const callee = getPeers().find(p => p.id === parsedMessage.calleeId);
+          if (callee && callee.socket.readyState === WebSocket.OPEN) {
+            const callNotification = {
+              type: 'call_incoming',
+              callId,
+              callerId: peerId,
+              withVideo: parsedMessage.withVideo,
+              timestamp: Date.now()
+            };
+            callee.socket.send(encryptMessage(JSON.stringify(callNotification)));
+          } else {
+            // Callee not available, notify caller
+            const callFailedNotification = {
+              type: 'call_failed',
+              callId,
+              reason: 'Callee not available',
+              timestamp: Date.now()
+            };
+            ws.send(encryptMessage(JSON.stringify(callFailedNotification)));
+          }
+          break;
+        }
+          
+        case 'call_accept': {
+          // Handle call acceptance
+          console.log(`Call acceptance for ${parsedMessage.callId}`);
+          if (acceptCall(parsedMessage.callId)) {
+            // Notify the caller
+            const call = activeCalls.get(parsedMessage.callId);
+            const caller = getPeers().find(p => p.id === call.callerId);
+            if (caller && caller.socket.readyState === WebSocket.OPEN) {
+              const callAcceptedNotification = {
+                type: 'call_accepted',
+                callId: parsedMessage.callId,
+                timestamp: Date.now()
+              };
+              caller.socket.send(encryptMessage(JSON.stringify(callAcceptedNotification)));
+            }
+          }
+          break;
+        }
+          
+        case 'call_reject': {
+          // Handle call rejection
+          console.log(`Call rejection for ${parsedMessage.callId}`);
+          if (rejectCall(parsedMessage.callId, parsedMessage.reason)) {
+            // Notify the caller
+            const call = activeCalls.get(parsedMessage.callId);
+            const caller = getPeers().find(p => p.id === call.callerId);
+            if (caller && caller.socket.readyState === WebSocket.OPEN) {
+              const callRejectedNotification = {
+                type: 'call_rejected',
+                callId: parsedMessage.callId,
+                reason: parsedMessage.reason,
+                timestamp: Date.now()
+              };
+              caller.socket.send(encryptMessage(JSON.stringify(callRejectedNotification)));
+            }
+          }
+          break;
+        }
+          
+        case 'call_end': {
+          // Handle call ending
+          console.log(`Call ending for ${parsedMessage.callId}`);
+          if (endCall(parsedMessage.callId)) {
+            // Notify the other party
+            const call = activeCalls.get(parsedMessage.callId);
+            const otherPartyId = peerId === call.callerId ? call.calleeId : call.callerId;
+            const otherParty = getPeers().find(p => p.id === otherPartyId);
+            if (otherParty && otherParty.socket.readyState === WebSocket.OPEN) {
+              const callEndedNotification = {
+                type: 'call_ended',
+                callId: parsedMessage.callId,
+                timestamp: Date.now()
+              };
+              otherParty.socket.send(encryptMessage(JSON.stringify(callEndedNotification)));
+            }
+          }
+          break;
+        }
+          
+        case 'ice_candidate': {
+          // Handle ICE candidate
+          console.log(`ICE candidate for ${parsedMessage.callId}`);
+          handleIceCandidate(parsedMessage.callId, peerId, parsedMessage.candidate);
+          break;
+        }
+          
+        case 'sdp_offer': {
+          // Handle SDP offer
+          console.log(`SDP offer for ${parsedMessage.callId}`);
+          handleSdpExchange(parsedMessage.callId, peerId, 'offer', parsedMessage.sdp);
+          break;
+        }
+          
+        case 'sdp_answer': {
+          // Handle SDP answer
+          console.log(`SDP answer for ${parsedMessage.callId}`);
+          handleSdpExchange(parsedMessage.callId, peerId, 'answer', parsedMessage.sdp);
+          break;
+        }
+          
+        // Group Call Handling
+        case 'group_call_initiate': {
+          // Handle group call initiation
+          console.log(`Group call initiation from ${peerId} to group ${parsedMessage.groupId}`);
+          
+          // Verify user is member of group
+          if (!isGroupMember(parsedMessage.groupId, peerId)) {
+            console.log(`User ${peerId} is not a member of group ${parsedMessage.groupId}`);
+            break;
+          }
+          
+          const groupCallId = initiateGroupCall(parsedMessage.groupId, peerId, parsedMessage.withVideo);
+          
+          // Notify all group members
+          const groupCallNotification = {
+            type: 'group_call_incoming',
+            groupCallId,
+            groupId: parsedMessage.groupId,
+            initiatorId: peerId,
+            withVideo: parsedMessage.withVideo,
+            timestamp: Date.now()
+          };
+          
+          broadcastToGroupMembers(parsedMessage.groupId, JSON.stringify(groupCallNotification), (memberId, message) => {
+            if (memberId !== peerId) { // Don't send to initiator
+              const targetPeer = getPeers().find(p => p.id === memberId);
+              if (targetPeer && targetPeer.socket.readyState === WebSocket.OPEN) {
+                return targetPeer.socket.send(encryptMessage(message));
+              }
+            }
+            return false;
+          });
+          break;
+        }
+          
+        case 'group_call_join': {
+          // Handle group call joining
+          console.log(`Group call join for ${parsedMessage.groupCallId} by ${peerId}`);
+          if (joinGroupCall(parsedMessage.groupCallId, peerId)) {
+            // Notification is handled by the joinGroupCall function
+          }
+          break;
+        }
+          
+        case 'group_call_leave': {
+          // Handle group call leaving
+          console.log(`Group call leave for ${parsedMessage.groupCallId} by ${peerId}`);
+          if (leaveGroupCall(parsedMessage.groupCallId, peerId)) {
+            // Notification is handled by the leaveGroupCall function
+          }
+          break;
+        }
+          
+        case 'group_call_end': {
+          // Handle group call ending
+          console.log(`Group call ending for ${parsedMessage.groupCallId}`);
+          if (endGroupCall(parsedMessage.groupCallId)) {
+            // Notification is handled by the endGroupCall function
+          }
+          break;
+        }
+          
+        case 'group_ice_candidate': {
+          // Handle group ICE candidate
+          console.log(`Group ICE candidate for ${parsedMessage.groupCallId}`);
+          handleGroupIceCandidate(
+            parsedMessage.groupCallId,
+            peerId,
+            parsedMessage.recipientId,
+            parsedMessage.candidate
+          );
+          break;
+        }
+          
+        case 'group_sdp_offer': {
+          // Handle group SDP offer
+          console.log(`Group SDP offer for ${parsedMessage.groupCallId}`);
+          handleGroupSdpExchange(
+            parsedMessage.groupCallId,
+            peerId,
+            parsedMessage.recipientId,
+            'offer',
+            parsedMessage.sdp
+          );
+          break;
+        }
+          
+        case 'group_sdp_answer': {
+          // Handle group SDP answer
+          console.log(`Group SDP answer for ${parsedMessage.groupCallId}`);
+          handleGroupSdpExchange(
+            parsedMessage.groupCallId,
+            peerId,
+            parsedMessage.recipientId,
+            'answer',
+            parsedMessage.sdp
+          );
+          break;
+        }
+        
+        case 'group_file_request': {
+          // Verify user is member of group
+          if (!isGroupMember(parsedMessage.groupId, peerId)) {
             console.log(`User ${peerId} is not a member of group ${parsedMessage.groupId}`);
             break;
           }
@@ -817,8 +1096,9 @@ wss.on('connection', (ws, req) => {
             });
           }
           break;
+        }
           
-        case 'general_announcement':
+        case 'general_announcement': {
           // Handle general announcement
           console.log(`General announcement from ${peerId}: ${parsedMessage.title}`);
           
@@ -829,6 +1109,8 @@ wss.on('connection', (ws, req) => {
             peerId,
             parsedMessage.priority || 'normal'
           );
+          break;
+        }
           
           // Broadcast to all peers
           const announcementMessage = {
@@ -985,22 +1267,70 @@ udpSocket.on('message', (msg, rinfo) => {
       
       console.log(`Discovery message from ${rinfo.address}:${rinfo.port}`);
       
+      // Get our access code from settings
+      const userSettings = getUserSettings();
+      const ourAccessCode = userSettings.accessCode || '';
+      
       // Send a response with our information
       const response = {
         type: 'discovery_response',
         ip: localIp,
         port: WS_PORT,
-        hostname: hostname
+        hostname: hostname,
+        version: '1.0.0',
+        capabilities: ['chat', 'file', 'call', 'clipboard'],
+        auth: false // Will be verified by receiving peer
       };
       
       const responseBuffer = Buffer.from(JSON.stringify(response));
       udpSocket.send(responseBuffer, 0, responseBuffer.length, rinfo.port, rinfo.address);
       
-      // Try to connect to the peer via WebSocket
-      connectToPeer(rinfo.address, message.port || WS_PORT);
+      // Add to peer list regardless of authorization status
+      // The peer will be marked as authorized/unauthorized in the UI
+      const peerId = `${rinfo.address}:${message.port || WS_PORT}`;
+      
+      // Check if this peer is already in our list
+      const existingPeer = getPeers().find(p => p.id === peerId);
+      if (!existingPeer) {
+        // Add to peer list with auth status
+        addPeerToDiscoveryList({
+          id: peerId,
+          ip: rinfo.address,
+          port: message.port || WS_PORT,
+          hostname: message.hostname || 'Unknown',
+          lastSeen: Date.now(),
+          capabilities: message.capabilities || [],
+          version: message.version || '1.0.0',
+          authorized: false // Will be updated when connection is established
+        });
+      } else {
+        // Update last seen timestamp
+        updatePeerLastSeen(peerId);
+      }
     } else if (message.type === 'discovery_response') {
       console.log(`Discovery response from ${message.hostname || rinfo.address}:${message.port}`);
-      connectToPeer(rinfo.address, message.port || WS_PORT);
+      
+      // Add to peer list regardless of authorization status
+      const peerId = `${rinfo.address}:${message.port || WS_PORT}`;
+      
+      // Check if this peer is already in our list
+      const existingPeer = getPeers().find(p => p.id === peerId);
+      if (!existingPeer) {
+        // Add to peer list with auth status
+        addPeerToDiscoveryList({
+          id: peerId,
+          ip: rinfo.address,
+          port: message.port || WS_PORT,
+          hostname: message.hostname || 'Unknown',
+          lastSeen: Date.now(),
+          capabilities: message.capabilities || [],
+          version: message.version || '1.0.0',
+          authorized: false // Will be updated when connection is established
+        });
+      } else {
+        // Update last seen timestamp
+        updatePeerLastSeen(peerId);
+      }
     }
   } catch (error) {
     console.error('Error processing UDP message:', error);
@@ -1055,13 +1385,25 @@ udpSocket.bind(UDP_PORT, () => {
   // Enable broadcast
   udpSocket.setBroadcast(true);
   
+  // Set up periodic cleanup of inactive peers
+  setInterval(() => {
+    removeInactivePeers(PEER_TIMEOUT);
+  }, BROADCAST_INTERVAL);
+  
   // Start broadcasting discovery messages
   setInterval(() => {
+    // Get access code from user settings
+    const userSettings = getUserSettings();
+    const accessCode = userSettings.accessCode || '';
+    
     const discoveryMessage = {
       type: 'discovery',
       ip: localIp,
       port: WS_PORT,
-      hostname: hostname
+      hostname: hostname,
+      version: '1.0.0',
+      capabilities: ['chat', 'file', 'call', 'clipboard'],
+      auth: false // Will be verified by receiving peer
     };
     
     const messageBuffer = Buffer.from(JSON.stringify(discoveryMessage));

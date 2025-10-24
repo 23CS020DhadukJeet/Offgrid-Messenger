@@ -37,6 +37,7 @@ import ComputerIcon from '@mui/icons-material/Computer';
 import GroupIcon from '@mui/icons-material/Group';
 import RefreshIcon from '@mui/icons-material/Refresh';
 import WifiIcon from '@mui/icons-material/Wifi';
+import CallIcon from '@mui/icons-material/Call';
 
 // TabPanel component for tab content
 function TabPanel(props) {
@@ -68,7 +69,8 @@ function Sidebar({
   groups = [], 
   selectedGroup, 
   onSelectGroup,
-  onManageGroups 
+  onManageGroups,
+  onCallPeer 
 }) {
   const [tabValue, setTabValue] = useState(0);
   const [openManualConnect, setOpenManualConnect] = useState(false);
@@ -230,19 +232,51 @@ function Sidebar({
                     key={peer.id} 
                     disablePadding
                     secondaryAction={null}
+                    sx={{ opacity: peer.authorized ? 1 : 0.6 }}
                   >
                     <ListItemButton 
                       selected={selectedPeer && selectedPeer.id === peer.id}
                       onClick={() => onSelectPeer(peer)}
+                      disabled={!peer.authorized}
                     >
                       <ListItemAvatar>
-                        <Avatar>
-                          <ComputerIcon />
-                        </Avatar>
+                        <Badge
+                          overlap="circular"
+                          anchorOrigin={{ vertical: 'bottom', horizontal: 'right' }}
+                          badgeContent={
+                            <Box
+                              sx={{
+                                width: 10,
+                                height: 10,
+                                borderRadius: '50%',
+                                bgcolor: peer.authorized ? 'success.main' : 'text.disabled',
+                                border: '1px solid white'
+                              }}
+                            />
+                          }
+                        >
+                          <Avatar sx={{ bgcolor: peer.authorized ? 'primary.main' : 'grey.500' }}>
+                            <ComputerIcon />
+                          </Avatar>
+                        </Badge>
                       </ListItemAvatar>
                       <ListItemText 
                         primary={peer.hostname || 'Unknown'}
-                        secondary={peer.ip}
+                        secondary={
+                          <React.Fragment>
+                            {peer.ip}
+                            {!peer.authorized && (
+                              <Typography
+                                component="span"
+                                variant="caption"
+                                color="error"
+                                sx={{ display: 'block', mt: 0.5 }}
+                              >
+                                Unauthorized
+                              </Typography>
+                            )}
+                          </React.Fragment>
+                        }
                         primaryTypographyProps={{
                           className: 'text-ellipsis',
                           title: peer.hostname || 'Unknown'
@@ -252,6 +286,19 @@ function Sidebar({
                           title: peer.ip
                         }}
                       />
+                      <IconButton 
+                        edge="end" 
+                        aria-label="call"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          if (typeof onCallPeer === 'function' && peer.authorized) {
+                            onCallPeer(peer.id);
+                          }
+                        }}
+                        disabled={!peer.authorized}
+                      >
+                        <CallIcon />
+                      </IconButton>
                     </ListItemButton>
                   </ListItem>
                 ))}
