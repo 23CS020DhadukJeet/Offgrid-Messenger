@@ -204,6 +204,18 @@ const server = http.createServer((req, res) => {
         res.setHeader('Content-Type', 'application/json');
         res.writeHead(200);
         res.end(JSON.stringify({ success: true, group }));
+
+        // Notify all group members connected to this server
+        const notifyMessage = {
+          type: 'group_added',
+          group
+        };
+        (group.members || []).forEach(memberId => {
+          const targetPeer = getPeers().find(p => p.id === memberId);
+          if (targetPeer && targetPeer.socket.readyState === WebSocket.OPEN) {
+            targetPeer.socket.send(encryptMessage(JSON.stringify(notifyMessage)));
+          }
+        });
       } catch (error) {
         res.writeHead(400);
         res.end(JSON.stringify({ success: false, message: 'Invalid request' }));
@@ -251,6 +263,32 @@ const server = http.createServer((req, res) => {
         res.setHeader('Content-Type', 'application/json');
         res.writeHead(success ? 200 : 400);
         res.end(JSON.stringify({ success }));
+
+        if (success) {
+          const group = getGroup(groupId);
+          // Notify the added member
+          const addedMessage = {
+            type: 'group_added',
+            group
+          };
+          const targetPeer = getPeers().find(p => p.id === userId);
+          if (targetPeer && targetPeer.socket.readyState === WebSocket.OPEN) {
+            targetPeer.socket.send(encryptMessage(JSON.stringify(addedMessage)));
+          }
+
+          // Notify existing members of update
+          const updateMessage = {
+            type: 'group_updated',
+            group
+          };
+          (group.members || []).forEach(memberId => {
+            if (memberId === userId) return;
+            const peer = getPeers().find(p => p.id === memberId);
+            if (peer && peer.socket.readyState === WebSocket.OPEN) {
+              peer.socket.send(encryptMessage(JSON.stringify(updateMessage)));
+            }
+          });
+        }
       } catch (error) {
         res.writeHead(400);
         res.end(JSON.stringify({ success: false, message: 'Invalid request' }));
@@ -273,6 +311,31 @@ const server = http.createServer((req, res) => {
         res.setHeader('Content-Type', 'application/json');
         res.writeHead(success ? 200 : 400);
         res.end(JSON.stringify({ success }));
+
+        if (success) {
+          // Notify the removed member
+          const removedMessage = {
+            type: 'group_removed',
+            groupId
+          };
+          const removedPeer = getPeers().find(p => p.id === userId);
+          if (removedPeer && removedPeer.socket.readyState === WebSocket.OPEN) {
+            removedPeer.socket.send(encryptMessage(JSON.stringify(removedMessage)));
+          }
+
+          // Notify remaining members
+          const group = getGroup(groupId);
+          const updateMessage = {
+            type: 'group_updated',
+            group
+          };
+          (group.members || []).forEach(memberId => {
+            const peer = getPeers().find(p => p.id === memberId);
+            if (peer && peer.socket.readyState === WebSocket.OPEN) {
+              peer.socket.send(encryptMessage(JSON.stringify(updateMessage)));
+            }
+          });
+        }
       } catch (error) {
         res.writeHead(400);
         res.end(JSON.stringify({ success: false, message: 'Invalid request' }));
@@ -582,6 +645,22 @@ const server = http.createServer((req, res) => {
         res.setHeader('Content-Type', 'application/json');
         res.writeHead(success ? 200 : 400);
         res.end(JSON.stringify({ success }));
+
+        if (success) {
+          // Notify members group deleted
+          const deletedMessage = {
+            type: 'group_deleted',
+            groupId
+          };
+          const group = getGroup(groupId);
+          const members = group && group.members ? group.members : [];
+          members.forEach(memberId => {
+            const peer = getPeers().find(p => p.id === memberId);
+            if (peer && peer.socket.readyState === WebSocket.OPEN) {
+              peer.socket.send(encryptMessage(JSON.stringify(deletedMessage)));
+            }
+          });
+        }
       } catch (error) {
         res.writeHead(400);
         res.end(JSON.stringify({ success: false, message: 'Invalid request' }));
@@ -709,6 +788,13 @@ wss.on('connection', (ws, req) => {
   };
   
   ws.send(encryptMessage(JSON.stringify(peerListMessage)));
+
+  // Send self peer id to the new peer
+  const selfPeerMessage = {
+    type: 'self_peer',
+    id: peerId
+  };
+  ws.send(encryptMessage(JSON.stringify(selfPeerMessage)));
   
   // Broadcast to all peers that a new peer has joined
   const newPeerMessage = {

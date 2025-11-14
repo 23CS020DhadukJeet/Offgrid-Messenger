@@ -145,6 +145,7 @@ function App() {
   // State for username
   const [username, setUsername] = useState(user ? user.username : 'User');
   const [pendingAuthPeerId, setPendingAuthPeerId] = useState(null);
+  const [localPeerId, setLocalPeerId] = useState(null);
   
   // State for call management
   const [activeCall, setActiveCall] = useState(null);
@@ -281,6 +282,9 @@ function App() {
         const data = JSON.parse(message);
         
         switch (data.type) {
+          case 'self_peer':
+            setLocalPeerId(data.id);
+            break;
           case 'peer_list':
             // Update peers with authorized status
             setPeers(data.peers.map(peer => ({
@@ -343,6 +347,38 @@ function App() {
               showNotification(`${data.hostname || 'A peer'} is now authorized`, 'success');
             } else {
               showNotification(`${data.hostname || 'A peer'} is unauthorized`, 'warning');
+            }
+            break;
+
+          case 'group_added':
+            if (data.group && data.group.members && localPeerId && data.group.members.includes(localPeerId)) {
+              setGroups(prev => {
+                const exists = prev.some(g => g.id === data.group.id);
+                return exists ? prev : [...prev, data.group];
+              });
+              showNotification(`Added to group ${data.group.name || data.group.id}`, 'success');
+            }
+            break;
+
+          case 'group_updated':
+            if (data.group) {
+              setGroups(prev => prev.map(g => g.id === data.group.id ? data.group : g));
+            }
+            break;
+
+          case 'group_removed':
+            if (data.groupId) {
+              setGroups(prev => prev.filter(g => g.id !== data.groupId));
+              if (selectedGroup && selectedGroup.id === data.groupId) setSelectedGroup(null);
+              showNotification('Removed from a group', 'warning');
+            }
+            break;
+
+          case 'group_deleted':
+            if (data.groupId) {
+              setGroups(prev => prev.filter(g => g.id !== data.groupId));
+              if (selectedGroup && selectedGroup.id === data.groupId) setSelectedGroup(null);
+              showNotification('Group deleted', 'info');
             }
             break;
             
@@ -794,10 +830,8 @@ function App() {
   const sendChatMessage = async (content) => {
     if (!selectedPeer) return;
     
-    const messageData = {
+    const baseMessage = {
       type: 'chat',
-      from: 'me',
-      to: selectedPeer.id,
       content,
       timestamp: Date.now()
     };
@@ -805,12 +839,13 @@ function App() {
     // Try to send via peer-to-peer connection first
     let messageSent = false;
     if (isConnectedToPeer(selectedPeer.id)) {
-      messageSent = await sendMessageToPeer(selectedPeer.id, messageData);
+      // Omit 'to' for direct peer server to broadcast to its clients
+      messageSent = await sendMessageToPeer(selectedPeer.id, baseMessage);
     }
     
     // Fallback to server relay if peer-to-peer fails
     if (!messageSent) {
-      await sendMessage(messageData);
+      await sendMessage({ ...baseMessage, to: selectedPeer.id });
     }
     
     // Add message to local state
@@ -1315,7 +1350,7 @@ function App() {
           <GroupManager
             open={groupManagerOpen}
             onClose={() => setGroupManagerOpen(false)}
-            userId={user ? user.id : null}
+            userId={localPeerId || (user ? user.id : null)}
             availablePeers={peers}
             onGroupSelect={handleGroupSelect}
             selectedGroup={selectedGroup}
