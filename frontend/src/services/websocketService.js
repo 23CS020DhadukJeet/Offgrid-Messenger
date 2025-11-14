@@ -32,6 +32,7 @@ let peerConnections = new Map();
 const WS_PORT = 8080; // WebSocket server port
 const RECONNECT_INTERVAL = 3000; // Initial reconnect delay (3 seconds)
 const MAX_RECONNECT_ATTEMPTS = 20; // Maximum number of reconnection attempts
+let RELAY_HOST = null; // Optional centralized relay host
 
 /**
  * Encryption configuration (must match backend)
@@ -160,8 +161,8 @@ function initializeWebSocket(callbacks) {
   }
   
   // Determine the WebSocket server host
-  // Uses the same host as the web application for local development
-  const host = window.location.hostname === 'localhost' ? 'localhost' : window.location.hostname;
+  // Prefer explicitly set relay host when provided
+  const host = RELAY_HOST || (window.location.hostname === 'localhost' ? 'localhost' : window.location.hostname);
   
   // Attempt to create a new WebSocket connection
   try {
@@ -181,6 +182,14 @@ function initializeWebSocket(callbacks) {
     handlers.onError(error);
     scheduleReconnect(); // Attempt to reconnect after failure
   }
+}
+
+/**
+ * Set centralized relay host
+ * @param {string} host - Hostname or IP for relay server
+ */
+function setRelayHost(host) {
+  RELAY_HOST = host;
 }
 
 /**
@@ -526,5 +535,6 @@ export {
   sendMessageToPeer,
   getConnectedPeers,
   isConnectedToPeer,
-  closeAllPeerConnections
+  closeAllPeerConnections,
+  setRelayHost
 };

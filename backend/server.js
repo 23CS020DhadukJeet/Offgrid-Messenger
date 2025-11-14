@@ -67,6 +67,10 @@ const MAX_RETRY_ATTEMPTS = 3;
 // Initialize connection retry mechanism
 const retryConnections = new Map(); // Store failed connection attempts
 
+// Presence and offline queue
+const sessions = new Map(); // peerId -> { socket, lastSeen, authorized }
+const offlineMessages = new Map(); // peerId -> [ message ]
+
 // Function to add a connection to retry queue
 function addConnectionRetry(ip, port, attempts = 0) {
   const key = `${ip}:${port}`;
@@ -681,7 +685,7 @@ console.log(`HTTP and WebSocket server running at http://${localIp}:${HTTP_PORT}
 const udpSocket = dgram.createSocket('udp4');
 
 // Start the server
-server.listen(HTTP_PORT);
+server.listen(HTTP_PORT, '0.0.0.0');
 
 // WebSocket message types
 const MESSAGE_TYPES = {
@@ -754,6 +758,18 @@ wss.on('connection', (ws, req) => {
   // Add the new peer to our list
   const peerId = `${clientIp}:${WS_PORT}`;
   addPeer(peerId, ws, clientIp);
+
+  // Track session
+  sessions.set(peerId, { socket: ws, lastSeen: Date.now(), authorized: false });
+  
+  // Broadcast presence online
+  const presenceOnline = {
+    type: 'presence_update',
+    peerId,
+    status: 'online',
+    timestamp: Date.now()
+  };
+  broadcastToPeers(JSON.stringify(presenceOnline));
   
   // Initially mark as unauthorized in discovery list
   const discoveredPeer = getDiscoveredPeers().find(p => p.id === peerId);
@@ -795,6 +811,20 @@ wss.on('connection', (ws, req) => {
     id: peerId
   };
   ws.send(encryptMessage(JSON.stringify(selfPeerMessage)));
+
+  // Flush queued offline messages if any
+  const queued = offlineMessages.get(peerId);
+  if (queued && queued.length) {
+    for (const msg of queued) {
+      try {
+        ws.send(encryptMessage(JSON.stringify(msg)));
+      } catch (e) {
+        console.error('Error delivering queued message:', e);
+        break;
+      }
+    }
+    offlineMessages.delete(peerId);
+  }
   
   // Broadcast to all peers that a new peer has joined
   const newPeerMessage = {
@@ -820,21 +850,34 @@ wss.on('connection', (ws, req) => {
         const correctAccessCode = userSettings.accessCode || '';
         
         // Check if the provided access code is correct
-        const isAuthorized = parsedMessage.accessCode === correctAccessCode;
-        
-        // Update peer's authorization status
-        updatePeerAuthStatus(peerId, isAuthorized);
-        
-        // Send response
-        const response = {
-          type: 'access_code_verification',
-          success: isAuthorized,
-          message: isAuthorized ? 'Access code verified successfully' : 'Invalid access code'
-        };
-        
-        ws.send(encryptMessage(JSON.stringify(response)));
-        return;
+      const isAuthorized = parsedMessage.accessCode === correctAccessCode;
+      
+      // Update peer's authorization status
+      updatePeerAuthStatus(peerId, isAuthorized);
+      if (sessions.has(peerId)) {
+        const s = sessions.get(peerId);
+        sessions.set(peerId, { ...s, authorized: isAuthorized });
       }
+      
+      // Send response
+      const response = {
+        type: 'access_code_verification',
+        success: isAuthorized,
+        message: isAuthorized ? 'Access code verified successfully' : 'Invalid access code'
+      };
+      
+      ws.send(encryptMessage(JSON.stringify(response)));
+
+      // Broadcast auth status change to all peers
+      const authStatus = {
+        type: 'peer_auth_status',
+        peerId,
+        authorized: isAuthorized,
+        timestamp: Date.now()
+      };
+      broadcastToPeers(JSON.stringify(authStatus));
+      return;
+    }
       
       switch (parsedMessage.type) {
         case 'chat':
@@ -895,10 +938,77 @@ wss.on('connection', (ws, req) => {
           break;
         }
           
-        case 'file_request':
-          // Handle file transfer request
-          handleFileTransferRequest(parsedMessage, peerId);
+        case 'file_request': {
+          // Relay file transfer request to target peer
+          const targetPeerId = parsedMessage.to;
+          if (targetPeerId) {
+            const targetPeer = getPeers().find(p => p.id === targetPeerId);
+            const relayMessage = {
+              ...parsedMessage,
+              senderPeerId: peerId
+            };
+            if (targetPeer && targetPeer.socket.readyState === WebSocket.OPEN) {
+              targetPeer.socket.send(encryptMessage(JSON.stringify(relayMessage)));
+            } else {
+              // Inform sender target is offline
+              ws.send(encryptMessage(JSON.stringify({ type: 'file_queued', to: targetPeerId, transferId: parsedMessage.transferId })));
+            }
+          } else {
+            // Handle as local incoming request
+            handleFileTransferRequest(parsedMessage, peerId);
+          }
           break;
+        }
+
+        case 'file_response': {
+          // Relay file response back to sender
+          const originalSenderId = parsedMessage.to || parsedMessage.senderPeerId;
+          if (originalSenderId) {
+            const senderPeer = getPeers().find(p => p.id === originalSenderId);
+            if (senderPeer && senderPeer.socket.readyState === WebSocket.OPEN) {
+              senderPeer.socket.send(encryptMessage(JSON.stringify({ ...parsedMessage, receiverPeerId: peerId })));
+            }
+          }
+          break;
+        }
+
+        case 'file_chunk': {
+          // Relay file chunk to target peer
+          const targetPeerId = parsedMessage.to;
+          if (targetPeerId) {
+            const targetPeer = getPeers().find(p => p.id === targetPeerId);
+            if (targetPeer && targetPeer.socket.readyState === WebSocket.OPEN) {
+              targetPeer.socket.send(encryptMessage(JSON.stringify({ ...parsedMessage, senderPeerId: peerId })));
+            } else {
+              // Drop or queue chunks: notify sender
+              ws.send(encryptMessage(JSON.stringify({ type: 'file_error', transferId: parsedMessage.transferId, reason: 'recipient_offline' })));
+            }
+          }
+          break;
+        }
+
+        case 'file_transfer_complete': {
+          // Relay completion to target
+          const targetPeerId = parsedMessage.to;
+          if (targetPeerId) {
+            const targetPeer = getPeers().find(p => p.id === targetPeerId);
+            if (targetPeer && targetPeer.socket.readyState === WebSocket.OPEN) {
+              targetPeer.socket.send(encryptMessage(JSON.stringify({ ...parsedMessage, senderPeerId: peerId })));
+            }
+          }
+          break;
+        }
+
+        case 'file_transfer_cancel': {
+          const targetPeerId = parsedMessage.to;
+          if (targetPeerId) {
+            const targetPeer = getPeers().find(p => p.id === targetPeerId);
+            if (targetPeer && targetPeer.socket.readyState === WebSocket.OPEN) {
+              targetPeer.socket.send(encryptMessage(JSON.stringify({ ...parsedMessage, senderPeerId: peerId })));
+            }
+          }
+          break;
+        }
           
         case 'clipboard':
           // Handle clipboard sharing
@@ -1362,6 +1472,16 @@ wss.on('connection', (ws, req) => {
     };
     
     broadcastToPeers(JSON.stringify(peerLeftMessage));
+
+    // Update session and broadcast presence offline
+    sessions.delete(peerId);
+    const presenceOffline = {
+      type: 'presence_update',
+      peerId,
+      status: 'offline',
+      timestamp: Date.now()
+    };
+    broadcastToPeers(JSON.stringify(presenceOffline));
   });
 });
 
@@ -1495,7 +1615,7 @@ function connectToPeer(ip, port) {
 }
 
 // Bind UDP socket
-udpSocket.bind(UDP_PORT, () => {
+udpSocket.bind(UDP_PORT, '0.0.0.0', () => {
   console.log(`UDP discovery service running on port ${UDP_PORT}`);
   
   // Enable broadcast

@@ -296,6 +296,20 @@ function App() {
             }
             break;
 
+          case 'message_queued':
+            if (data.clientMessageId) {
+              setMessages(prev => {
+                const peerId = data.to || (selectedPeer ? selectedPeer.id : null);
+                if (!peerId) return prev;
+                const msgs = prev[peerId] || [];
+                const updated = msgs.map(m => (
+                  m.clientMessageId === data.clientMessageId ? { ...m, status: 'queued' } : m
+                ));
+                return { ...prev, [peerId]: updated };
+              });
+            }
+            break;
+
           case 'message_read':
             setMessages(prev => {
               const peerId = data.from || (selectedPeer ? selectedPeer.id : null);
@@ -345,6 +359,14 @@ function App() {
               setSelectedPeer(null);
             }
             showNotification(`A peer has left the network`, 'info');
+            break;
+
+          case 'presence_update':
+            setPeers(prevPeers => prevPeers.map(p => 
+              p.id === data.peerId 
+                ? { ...p, status: data.status, lastSeen: data.timestamp } 
+                : p
+            ));
             break;
 
           case 'access_code_verification':
@@ -531,14 +553,14 @@ function App() {
   
   // Handle chat messages
   const handleChatMessage = (data) => {
-    const { from, content, timestamp } = data;
+    const { from, content, timestamp, messageId, clientMessageId } = data;
     const peerId = from;
     
     setMessages(prevMessages => {
       const peerMessages = prevMessages[peerId] || [];
       return {
         ...prevMessages,
-        [peerId]: [...peerMessages, { type: 'chat', senderId: peerId, receiverId: 'me', content, timestamp }]
+        [peerId]: [...peerMessages, { type: 'chat', senderId: peerId, receiverId: 'me', content, timestamp, messageId, clientMessageId, status: 'received' }]
       };
     });
     
@@ -553,6 +575,14 @@ function App() {
           body: content
         });
       }
+    } else {
+      // Send read receipt when viewing the conversation
+      sendMessage({
+        type: 'message_read',
+        to: peerId,
+        messageId: messageId || null,
+        clientMessageId: clientMessageId || null
+      });
     }
   };
   
