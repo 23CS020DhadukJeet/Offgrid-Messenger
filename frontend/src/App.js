@@ -322,6 +322,8 @@ function App() {
                 p.id === pendingAuthPeerId ? { ...p, authorized: true } : p
               )));
               showNotification('Access code verified successfully', 'success');
+              const authorizedPeer = peers.find(p => p.id === pendingAuthPeerId) || { id: pendingAuthPeerId };
+              setSelectedPeer(authorizedPeer);
             } else {
               showNotification(data.message || 'Invalid access code', 'warning');
             }
@@ -467,22 +469,21 @@ function App() {
   // Handle chat messages
   const handleChatMessage = (data) => {
     const { from, content, timestamp } = data;
+    const peerId = from;
     
     setMessages(prevMessages => {
-      const peerMessages = prevMessages[from] || [];
+      const peerMessages = prevMessages[peerId] || [];
       return {
         ...prevMessages,
-        [from]: [...peerMessages, { type: 'chat', from, content, timestamp }]
+        [peerId]: [...peerMessages, { type: 'chat', senderId: peerId, receiverId: 'me', content, timestamp }]
       };
     });
     
-    // Show notification if message is from someone other than the selected peer
-    if (!selectedPeer || selectedPeer.id !== from) {
-      const peer = peers.find(p => p.id === from);
-      const peerName = peer ? (peer.hostname || peer.id) : from;
+    if (!selectedPeer || selectedPeer.id !== peerId) {
+      const peer = peers.find(p => p.id === peerId);
+      const peerName = peer ? (peer.hostname || peer.id) : peerId;
       showNotification(`New message from ${peerName}`, 'info');
       
-      // Show system notification if window is not focused
       if (document.hidden) {
         window.electron.showNotification({
           title: `Message from ${peerName}`,
@@ -790,7 +791,7 @@ function App() {
   };
   
   // Send a chat message
-  const sendChatMessage = (content) => {
+  const sendChatMessage = async (content) => {
     if (!selectedPeer) return;
     
     const messageData = {
@@ -804,12 +805,12 @@ function App() {
     // Try to send via peer-to-peer connection first
     let messageSent = false;
     if (isConnectedToPeer(selectedPeer.id)) {
-      messageSent = sendMessageToPeer(selectedPeer.id, messageData);
+      messageSent = await sendMessageToPeer(selectedPeer.id, messageData);
     }
     
     // Fallback to server relay if peer-to-peer fails
     if (!messageSent) {
-      sendMessage(messageData);
+      await sendMessage(messageData);
     }
     
     // Add message to local state
@@ -819,7 +820,7 @@ function App() {
         ...prevMessages,
         [selectedPeer.id]: [
           ...peerMessages,
-          { type: 'chat', senderId: 'me', content, timestamp: Date.now() }
+          { type: 'chat', senderId: 'me', receiverId: selectedPeer.id, content, timestamp: Date.now() }
         ]
       };
     });
