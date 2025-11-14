@@ -282,6 +282,33 @@ function App() {
         const data = JSON.parse(message);
         
         switch (data.type) {
+          case 'message_delivered':
+            if (data.clientMessageId) {
+              setMessages(prev => {
+                const peerId = data.to || (selectedPeer ? selectedPeer.id : null);
+                if (!peerId) return prev;
+                const msgs = prev[peerId] || [];
+                const updated = msgs.map(m => (
+                  m.clientMessageId === data.clientMessageId ? { ...m, status: 'delivered' } : m
+                ));
+                return { ...prev, [peerId]: updated };
+              });
+            }
+            break;
+
+          case 'message_read':
+            setMessages(prev => {
+              const peerId = data.from || (selectedPeer ? selectedPeer.id : null);
+              if (!peerId) return prev;
+              const msgs = prev[peerId] || [];
+              const updated = msgs.map(m => (
+                (data.clientMessageId && m.clientMessageId === data.clientMessageId) || (data.messageId && m.messageId === data.messageId)
+                  ? { ...m, status: 'read' }
+                  : m
+              ));
+              return { ...prev, [peerId]: updated };
+            });
+            break;
           case 'self_peer':
             setLocalPeerId(data.id);
             break;
@@ -830,10 +857,12 @@ function App() {
   const sendChatMessage = async (content) => {
     if (!selectedPeer) return;
     
+    const clientMessageId = `${Date.now()}-${Math.random().toString(36).slice(2,8)}`;
     const baseMessage = {
       type: 'chat',
       content,
-      timestamp: Date.now()
+      timestamp: Date.now(),
+      clientMessageId
     };
     
     // Try to send via peer-to-peer connection first
@@ -855,7 +884,7 @@ function App() {
         ...prevMessages,
         [selectedPeer.id]: [
           ...peerMessages,
-          { type: 'chat', senderId: 'me', receiverId: selectedPeer.id, content, timestamp: Date.now() }
+          { type: 'chat', senderId: 'me', receiverId: selectedPeer.id, content, timestamp: Date.now(), clientMessageId, status: 'sent' }
         ]
       };
     });

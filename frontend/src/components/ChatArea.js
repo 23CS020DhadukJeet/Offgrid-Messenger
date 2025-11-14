@@ -98,7 +98,7 @@ function ChatArea({ messages, selectedPeer, onSendMessage, onSendFile }) {
               >
                 <Typography variant="body1">{message.content}</Typography>
                 <Typography variant="caption" sx={{ display: 'block', textAlign: 'right', mt: 0.5 }}>
-                  {new Date(message.timestamp).toLocaleTimeString()}
+                  {new Date(message.timestamp).toLocaleTimeString()} {message.senderId === 'me' && message.status ? ` • ${message.status}` : ''}
                 </Typography>
               </MessageBubble>
             ))}

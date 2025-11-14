@@ -845,25 +845,55 @@ wss.on('connection', (ws, req) => {
           if (parsedMessage.to) {
             const targetPeer = getPeers().find(p => p.id === parsedMessage.to);
             if (targetPeer && targetPeer.socket.readyState === WebSocket.OPEN) {
+              const messageId = `${Date.now()}-${Math.random().toString(36).slice(2,8)}`;
               const forwardedMessage = {
                 type: 'chat',
                 from: peerId,
                 content: parsedMessage.content,
-                timestamp: Date.now()
+                timestamp: Date.now(),
+                messageId,
+                clientMessageId: parsedMessage.clientMessageId || null
               };
               targetPeer.socket.send(encryptMessage(JSON.stringify(forwardedMessage)));
+              const deliveryReceipt = {
+                type: 'message_delivered',
+                to: parsedMessage.to,
+                messageId,
+                clientMessageId: parsedMessage.clientMessageId || null,
+                timestamp: Date.now()
+              };
+              ws.send(encryptMessage(JSON.stringify(deliveryReceipt)));
             }
           } else {
             // Otherwise broadcast to all peers
+            const messageId = `${Date.now()}-${Math.random().toString(36).slice(2,8)}`;
             const broadcastMessage = {
               type: 'chat',
               from: peerId,
               content: parsedMessage.content,
-              timestamp: Date.now()
+              timestamp: Date.now(),
+              messageId,
+              clientMessageId: parsedMessage.clientMessageId || null
             };
             broadcastToPeers(JSON.stringify(broadcastMessage), peerId);
           }
           break;
+
+        case 'message_read': {
+          const targetPeer = getPeers().find(p => p.id === parsedMessage.to);
+          if (targetPeer && targetPeer.socket.readyState === WebSocket.OPEN) {
+            const readReceipt = {
+              type: 'message_read',
+              from: peerId,
+              to: parsedMessage.to,
+              messageId: parsedMessage.messageId || null,
+              clientMessageId: parsedMessage.clientMessageId || null,
+              timestamp: Date.now()
+            };
+            targetPeer.socket.send(encryptMessage(JSON.stringify(readReceipt)));
+          }
+          break;
+        }
           
         case 'file_request':
           // Handle file transfer request
