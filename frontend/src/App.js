@@ -144,6 +144,7 @@ function App() {
   
   // State for username
   const [username, setUsername] = useState(user ? user.username : 'User');
+  const [pendingAuthPeerId, setPendingAuthPeerId] = useState(null);
   
   // State for call management
   const [activeCall, setActiveCall] = useState(null);
@@ -313,6 +314,18 @@ function App() {
               setSelectedPeer(null);
             }
             showNotification(`A peer has left the network`, 'info');
+            break;
+
+          case 'access_code_verification':
+            if (data.success && pendingAuthPeerId) {
+              setPeers(prevPeers => prevPeers.map(p => (
+                p.id === pendingAuthPeerId ? { ...p, authorized: true } : p
+              )));
+              showNotification('Access code verified successfully', 'success');
+            } else {
+              showNotification(data.message || 'Invalid access code', 'warning');
+            }
+            setPendingAuthPeerId(null);
             break;
             
           case 'peer_auth_status':
@@ -1072,6 +1085,7 @@ function App() {
         accessCode: '',
         error: ''
       });
+      setPendingAuthPeerId(peer.id);
       return;
     }
     
@@ -1304,6 +1318,7 @@ function App() {
             availablePeers={peers}
             onGroupSelect={handleGroupSelect}
             selectedGroup={selectedGroup}
+            onGroupsUpdated={loadUserGroups}
           />
           
           {/* File transfer history dialog */}

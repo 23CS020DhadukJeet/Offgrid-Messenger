@@ -239,7 +239,6 @@ function Sidebar({
                     <ListItemButton 
                       selected={selectedPeer && selectedPeer.id === peer.id}
                       onClick={() => onSelectPeer(peer)}
-                      disabled={!peer.authorized}
                     >
                       <ListItemAvatar>
                         <Badge

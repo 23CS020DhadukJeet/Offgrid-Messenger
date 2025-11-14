@@ -35,7 +35,8 @@ function GroupManager({
   userId, 
   availablePeers = [], 
   onGroupSelect,
-  selectedGroup 
+  selectedGroup,
+  onGroupsUpdated
 }) {
   const [groups, setGroups] = useState([]);
   const [createDialogOpen, setCreateDialogOpen] = useState(false);
@@ -77,6 +78,7 @@ function GroupManager({
         setSelectedMembers([]);
         setCreateDialogOpen(false);
         setError(null);
+        if (typeof onGroupsUpdated === 'function') onGroupsUpdated();
       } else {
         setError('Failed to create group');
       }
@@ -94,6 +96,7 @@ function GroupManager({
       if (success) {
         // Reload groups to get updated member list
         loadUserGroups();
+        if (typeof onGroupsUpdated === 'function') onGroupsUpdated();
       } else {
         setError('Failed to add member to group');
       }
@@ -109,6 +112,7 @@ function GroupManager({
       if (success) {
         // Reload groups to get updated member list
         loadUserGroups();
+        if (typeof onGroupsUpdated === 'function') onGroupsUpdated();
       } else {
         setError('Failed to remove member from group');
       }
@@ -128,6 +132,7 @@ function GroupManager({
         if (selectedGroup && selectedGroup.id === groupId) {
           onGroupSelect(null);
         }
+        if (typeof onGroupsUpdated === 'function') onGroupsUpdated();
       } else {
         setError('Failed to delete group');
       }
