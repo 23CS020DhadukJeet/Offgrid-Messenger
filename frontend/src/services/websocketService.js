@@ -34,6 +34,90 @@ const RECONNECT_INTERVAL = 3000; // Initial reconnect delay (3 seconds)
 const MAX_RECONNECT_ATTEMPTS = 20; // Maximum number of reconnection attempts
 
 /**
+ * Encryption configuration (must match backend)
+ * Backend uses AES-256-CBC with a 32-byte ASCII key and iv prepended
+ * Format over the wire: `${ivHex}:${base64Cipher}`
+ */
+const ENCRYPTION_KEY_STRING = 'a1b2c3d4e5f6g7h8i9j0k1l2m3n4o5p6';
+let cryptoKey = null; // Cached CryptoKey
+
+// Utility: import key as raw bytes (ASCII) for AES-CBC
+async function getCryptoKey() {
+  if (cryptoKey) return cryptoKey;
+  const keyBytes = new TextEncoder().encode(ENCRYPTION_KEY_STRING);
+  cryptoKey = await window.crypto.subtle.importKey(
+    'raw',
+    keyBytes,
+    { name: 'AES-CBC' },
+    false,
+    ['encrypt', 'decrypt']
+  );
+  return cryptoKey;
+}
+
+// Utility: ArrayBuffer -> base64
+function arrayBufferToBase64(buffer) {
+  const bytes = new Uint8Array(buffer);
+  let binary = '';
+  for (let i = 0; i < bytes.length; i++) {
+    binary += String.fromCharCode(bytes[i]);
+  }
+  return btoa(binary);
+}
+
+// Utility: base64 -> Uint8Array
+function base64ToUint8Array(base64) {
+  const binary = atob(base64);
+  const bytes = new Uint8Array(binary.length);
+  for (let i = 0; i < binary.length; i++) {
+    bytes[i] = binary.charCodeAt(i);
+  }
+  return bytes;
+}
+
+// Encrypt plaintext string to `${ivHex}:${base64Cipher}`
+async function encryptString(plaintext) {
+  const key = await getCryptoKey();
+  const iv = window.crypto.getRandomValues(new Uint8Array(16));
+  const data = new TextEncoder().encode(plaintext);
+  const cipherBuffer = await window.crypto.subtle.encrypt(
+    { name: 'AES-CBC', iv },
+    key,
+    data
+  );
+  const ivHex = Array.from(iv).map(b => b.toString(16).padStart(2, '0')).join('');
+  const cipherB64 = arrayBufferToBase64(cipherBuffer);
+  return `${ivHex}:${cipherB64}`;
+}
+
+// Decrypt `${ivHex}:${base64Cipher}` to plaintext string
+async function decryptString(encrypted) {
+  // If message is already JSON, return as-is
+  if (typeof encrypted !== 'string' || !encrypted.includes(':')) {
+    return encrypted;
+  }
+  const [ivHex, cipherB64] = encrypted.split(':');
+  if (!ivHex || !cipherB64 || ivHex.length !== 32) {
+    // Not our encrypted format; return raw
+    return encrypted;
+  }
+  const key = await getCryptoKey();
+  const iv = new Uint8Array(ivHex.match(/.{1,2}/g).map(h => parseInt(h, 16)));
+  const cipherBytes = base64ToUint8Array(cipherB64);
+  try {
+    const plainBuffer = await window.crypto.subtle.decrypt(
+      { name: 'AES-CBC', iv },
+      key,
+      cipherBytes
+    );
+    return new TextDecoder().decode(plainBuffer);
+  } catch (e) {
+    console.error('Decryption failed; delivering raw message:', e);
+    return encrypted; // Fallback to raw if decryption fails
+  }
+}
+
+/**
  * Callback handler functions for WebSocket events
  * These are set by the application when initializing the service
  * @type {Object}
@@ -156,13 +240,11 @@ function handleError(event) {
  * @param {MessageEvent} event - WebSocket message event
  * @param {string|ArrayBuffer|Blob|ArrayBufferView} event.data - The message data
  */
-function handleMessage(event) {
+async function handleMessage(event) {
   try {
-    // Pass the message data to the application's message handler
-    // The application is responsible for parsing the message if needed
-    handlers.onMessage(event.data);
+    const decrypted = await decryptString(event.data);
+    handlers.onMessage(decrypted);
   } catch (error) {
-    // Log any errors that occur during message handling
     console.error('Error handling message:', error);
   }
 }
@@ -176,21 +258,19 @@ function handleMessage(event) {
  * @param {Object} message - Message object to send to the server
  * @returns {boolean} - True if message was sent successfully, false otherwise
  */
-function sendMessage(message) {
-  // Check if WebSocket exists and is in OPEN state before sending
+async function sendMessage(message) {
   if (!ws || ws.readyState !== WebSocket.OPEN) {
     console.error('Cannot send message: WebSocket is not connected');
     return false;
   }
-  
   try {
-    // Convert message object to JSON string and send
-    ws.send(JSON.stringify(message));
-    return true; // Message sent successfully
+    const plaintext = JSON.stringify(message);
+    const encrypted = await encryptString(plaintext);
+    ws.send(encrypted);
+    return true;
   } catch (error) {
-    // Handle any errors during message serialization or sending
     console.error('Error sending message:', error);
-    return false; // Failed to send message
+    return false;
   }
 }
 
@@ -332,10 +412,15 @@ function connectToPeer(peer) {
         resolve(false);
       };
       
-      peerWs.onmessage = (event) => {
-        // Forward peer messages to the main message handler
+      peerWs.onmessage = async (event) => {
+        // Decrypt and forward peer messages to the main handler
         if (handlers.onMessage) {
-          handlers.onMessage(event.data);
+          try {
+            const decrypted = await decryptString(event.data);
+            handlers.onMessage(decrypted);
+          } catch (e) {
+            handlers.onMessage(event.data);
+          }
         }
       };
       
@@ -367,7 +452,7 @@ function disconnectFromPeer(peerId) {
  * @param {Object} message - Message object to send
  * @returns {boolean} - True if message was sent successfully, false otherwise
  */
-function sendMessageToPeer(peerId, message) {
+async function sendMessageToPeer(peerId, message) {
   const peerWs = peerConnections.get(peerId);
   
   if (!peerWs || peerWs.readyState !== WebSocket.OPEN) {
@@ -376,7 +461,9 @@ function sendMessageToPeer(peerId, message) {
   }
   
   try {
-    peerWs.send(JSON.stringify(message));
+    const plaintext = JSON.stringify(message);
+    const encrypted = await encryptString(plaintext);
+    peerWs.send(encrypted);
     return true;
   } catch (error) {
     console.error(`Error sending message to peer ${peerId}:`, error);

@@ -191,16 +191,18 @@ function Sidebar({
           <Box sx={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
             <Box sx={{ p: 1, display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
               <Tooltip title="Refresh peer list">
-                <IconButton 
-                  size="small" 
-                  onClick={handleRefreshPeers}
-                  disabled={isDiscovering}
-                >
-                  {isDiscovering ? 
-                    <CircularProgress size={20} /> : 
-                    <RefreshIcon />
-                  }
-                </IconButton>
+                <span>
+                  <IconButton 
+                    size="small" 
+                    onClick={handleRefreshPeers}
+                    disabled={isDiscovering}
+                  >
+                    {isDiscovering ? 
+                      <CircularProgress size={20} /> : 
+                      <RefreshIcon />
+                    }
+                  </IconButton>
+                </span>
               </Tooltip>
               
               <Box sx={{ display: 'flex', alignItems: 'center' }}>
