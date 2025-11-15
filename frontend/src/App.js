@@ -152,6 +152,44 @@ function App() {
   const [incomingCall, setIncomingCall] = useState(null);
   const [localStream, setLocalStream] = useState(null);
   const [remoteStreams, setRemoteStreams] = useState([]);
+  useEffect(() => {
+    if (isAuthenticated) {
+      const msgKey = `offgrid_messages_${username}`;
+      const grpKey = `offgrid_groupMessages_${username}`;
+      try {
+        const rawMessages = localStorage.getItem(msgKey);
+        if (rawMessages) {
+          const parsed = JSON.parse(rawMessages);
+          if (parsed && typeof parsed === 'object') setMessages(parsed);
+        }
+      } catch {}
+      try {
+        const rawGroup = localStorage.getItem(grpKey);
+        if (rawGroup) {
+          const parsed = JSON.parse(rawGroup);
+          if (parsed && typeof parsed === 'object') setGroupMessages(parsed);
+        }
+      } catch {}
+    }
+  }, [isAuthenticated, username]);
+
+  useEffect(() => {
+    if (isAuthenticated) {
+      const msgKey = `offgrid_messages_${username}`;
+      try {
+        localStorage.setItem(msgKey, JSON.stringify(messages));
+      } catch {}
+    }
+  }, [messages, isAuthenticated, username]);
+
+  useEffect(() => {
+    if (isAuthenticated) {
+      const grpKey = `offgrid_groupMessages_${username}`;
+      try {
+        localStorage.setItem(grpKey, JSON.stringify(groupMessages));
+      } catch {}
+    }
+  }, [groupMessages, isAuthenticated, username]);
   
   // Create theme based on mode
   const theme = useMemo(() => createTheme({
